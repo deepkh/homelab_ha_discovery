@@ -1,8 +1,9 @@
 # AGENTS.md
 
 ## Purposes
-1. Use shared Python modules for reusable metric collection, parsing, MQTT publishing, and Home Assistant discovery.
-1. Routers should stay separate from Debian hosts because they are collected remotely over SSH and will have different command behavior.
+1. Use shared Python modules for reusable MQTT publishing, environment loading, Home Assistant discovery, and common parsing helpers.
+1. Keep metric collection and parsing code separated by sensor type when command output or payload fields differ.
+1. Keep ASUS router collectors are collected remotely over SSH and may use different CLI commands.
 
 ## Folder Layout
 .
@@ -11,9 +12,6 @@
     ├── homelab_monitor
     │   ├── collectors
     │   └── scripts
-    └── network
-        ├── ax86u
-        └── ax86upro
 - Host identity is runtime data, not a folder split. Shared scripts should accept a host value and use it for MQTT topics, Home Assistant unique IDs, and device identifiers.
 - Python 3 code for Debian homelab hosts runs on the host itself, usually via a systemd timer.
 - Python 3 code for ASUS router collectors runs on a Debian homelab host and collects router data via SSH remote commands. The user will provide the required router CLI commands.
@@ -33,16 +31,16 @@ Recommended environment variables:
 - `HA_MQTT_USERNAME=...`
 - `HA_MQTT_PASSWORD=...`
 
-Use command `export $(grep -v '^#'  /etc/homelab-mqtt-monitor/mqtt.env | xargs)` to export they.
+For human operators, environment variables can be loaded from `/etc/homelab-mqtt-monitor/mqtt.env`. AI agents must not export credentials or run setup commands unless explicitly asked.
 
 Do not store MQTT credentials in this repository. For systemd services or timers, prefer an environment file outside the repo, for example `/etc/homelab-mqtt-monitor/mqtt.env`, referenced by service files with `EnvironmentFile=/etc/homelab-mqtt-monitor/mqtt.env`. The file should be readable only by the service user or root.
 
-Suggested MQTT/Home Assistant conventions:
+Required MQTT/Home Assistant conventions:
 - Use stable `unique_id` values based on host, component, and metric name.
 - Use `HA_MQTT_TOPIC_PREFIX` for the root topic prefix, defaulting to `homelab-mqtt-monitor`.
 - Use predictable state topics, for example `<prefix>/<host>/<component>/<metric>/state`.
 - Use predictable discovery topics, for example `homeassistant/sensor/<host>_<component>_<metric>/config`.
-- Publish Home Assistant discovery config when the script starts unless the existing script uses another pattern.
+- Publish Home Assistant discovery config when the script supports discovery, unless the existing script uses another pattern.
 - Keep device names and identifiers stable so Home Assistant does not create duplicate entities.
 
 ## Command safety
