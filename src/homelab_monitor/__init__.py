@@ -1,0 +1,1 @@
+"""Reusable homelab monitor package."""
