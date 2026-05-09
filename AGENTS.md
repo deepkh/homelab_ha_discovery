@@ -55,7 +55,7 @@ Required MQTT/Home Assistant conventions:
 - Metric state publishes should remain non-retained by default.
 - Discovery config must point to the exact state topic used by the metric publish, including any supported topic override.
 - CPU usage currently publishes state to `<prefix>/cpu/usages/<device>` with payload `{"CPU Usages":<percent>}` and discovery topic `homeassistant/sensor/homelab_ha_discovery_<device>_cpu_usage/config`.
-- GPU metrics currently publish one state payload to `<prefix>/gpu/usages/<device>` with `GPU Usages` and `Memory Usage`; discovery should expose separate sensors for `gpu_usage` and `gpu_memory_usage` from that shared state topic.
+- GPU metrics currently publish one state payload to `<prefix>/gpu/usages/<device>` with `GPU Usages`, `Memory Usage`, and `Temperature`; discovery should expose separate sensors for `gpu_usage`, `gpu_memory_usage`, and `gpu_temperature` from that shared state topic.
 
 ## Home Assistant cleanup
 This project was renamed from `homelab-mqtt-monitor` to `homelab-ha-discovery`.

@@ -158,14 +158,17 @@ homelab-ha-discovery/gpu/usages/hpc
 Payload:
 
 ```json
-{"GPU Usages":65.0,"Memory Usage":48.3}
+{"GPU Usages":65.0,"Memory Usage":48.3,"Temperature":40}
 ```
+
+For multiple GPUs, `Temperature` reports the hottest GPU temperature in Celsius.
 
 Discovery topics:
 
 ```text
 homeassistant/sensor/homelab_ha_discovery_hpc_gpu_usage/config
 homeassistant/sensor/homelab_ha_discovery_hpc_gpu_memory_usage/config
+homeassistant/sensor/homelab_ha_discovery_hpc_gpu_temperature/config
 ```
 
 Discovery config is retained. Metric state is non-retained by default.

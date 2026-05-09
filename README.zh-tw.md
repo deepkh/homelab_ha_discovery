@@ -158,14 +158,17 @@ homelab-ha-discovery/gpu/usages/hpc
 Payload：
 
 ```json
-{"GPU Usages":65.0,"Memory Usage":48.3}
+{"GPU Usages":65.0,"Memory Usage":48.3,"Temperature":40}
 ```
+
+若有多張 GPU，`Temperature` 會回報攝氏溫度最高的 GPU。
 
 Discovery topics：
 
 ```text
 homeassistant/sensor/homelab_ha_discovery_hpc_gpu_usage/config
 homeassistant/sensor/homelab_ha_discovery_hpc_gpu_memory_usage/config
+homeassistant/sensor/homelab_ha_discovery_hpc_gpu_temperature/config
 ```
 
 Discovery config 會被 retain。Metric state 預設不 retain。

@@ -66,6 +66,15 @@ def gpu_memory_usage_identity(device: str, state_topic: str) -> MetricIdentity:
     )
 
 
+def gpu_temperature_identity(device: str, state_topic: str) -> MetricIdentity:
+    return MetricIdentity(
+        host=device,
+        component="gpu",
+        metric="temperature",
+        state_topic_override=state_topic,
+    )
+
+
 def gpu_metrics_client_id(device: str) -> str:
     if not device:
         raise ValueError("device is required")
@@ -77,20 +86,32 @@ def publish_gpu_discovery(device: str, state_topic: str) -> None:
         (
             gpu_usage_identity(device, state_topic),
             f"{device} GPU Usage",
+            "%",
+            None,
             "{{ value_json['GPU Usages'] }}",
         ),
         (
             gpu_memory_usage_identity(device, state_topic),
             f"{device} GPU Memory Usage",
+            "%",
+            None,
             "{{ value_json['Memory Usage'] }}",
         ),
+        (
+            gpu_temperature_identity(device, state_topic),
+            f"{device} GPU Temperature",
+            "°C",
+            "temperature",
+            "{{ value_json['Temperature'] }}",
+        ),
     )
-    for identity, name, value_template in configs:
+    for identity, name, unit_of_measurement, device_class, value_template in configs:
         payload = json.dumps(
             sensor_discovery_config(
                 identity,
                 name=name,
-                unit_of_measurement="%",
+                unit_of_measurement=unit_of_measurement,
+                device_class=device_class,
                 state_class="measurement",
                 value_template=value_template,
             ),
