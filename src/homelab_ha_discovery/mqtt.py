@@ -17,6 +17,7 @@ def publish_mqtt(
     topic: str,
     payload: str,
     default_client_id: str = "homelab-ha-discovery",
+    retain: bool = False,
 ) -> None:
     import paho.mqtt.client as mqtt
 
@@ -41,6 +42,7 @@ def publish_mqtt(
         f"host={host}, "
         f"port={port} , "
         f"topic={topic}, "
+        f"retain={retain}, "
         f"username_set={bool(username)}, "
         f"password_set={bool(password)}",
     )
@@ -76,7 +78,7 @@ def publish_mqtt(
 
     try:
         client.loop_start()
-        publish_result = client.publish(topic, payload)
+        publish_result = client.publish(topic, payload, retain=retain)
         publish_result.wait_for_publish()
         if publish_result.rc != mqtt.MQTT_ERR_SUCCESS:
             raise RuntimeError(f"MQTT publish failed, return code: {publish_result.rc}")
