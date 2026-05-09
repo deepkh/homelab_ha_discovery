@@ -9,6 +9,7 @@
 .
 ├── AGENTS.md
 ├── README.md
+├── README.zh-tw.md
 └── src
     ├── homelab_ha_discovery
     │   ├── collectors
@@ -70,15 +71,15 @@ Do not publish deletion payloads to the MQTT broker unless the user explicitly a
 - Prefer parsing saved sample command output locally when possible.
 
 ## Rules
-- Every prompt usually affects only one Python 3 script.
 - Follow the existing structure and style.
 - Prefer small diffs.
 - Do not add dependencies without asking.
 - Do not rename or move files unless necessary.
 - Do not update `requirements.txt` unless explicitly asked.
 - Keep changes scoped to the requested script.
-- Every code change must include a documentation check for `AGENTS.md` and `README.md`; update both in the same change when behavior, commands, topics, environment variables, setup, validation, or user-facing usage changes.
-- If `README.md` is absent when a code change needs user-facing documentation, report that in the final response instead of silently leaving the documentation gap.
+- Every code change must include a documentation check for `AGENTS.md`, `README.md`, and `README.zh-tw.md`; update all affected docs in the same change when behavior, commands, topics, environment variables, setup, validation, or user-facing usage changes.
+- Keep `README.md` English-only except for language selector link labels.
+- Keep `README.zh-tw.md` as the Traditional Chinese counterpart to `README.md`; when `README.md` changes, update `README.zh-tw.md` with corresponding content in the same change.
 - Add shared helpers only when the user asks or when existing duplicated logic makes the change clearly safer.
 - Do not introduce device-specific folders for Debian homelab hosts; pass device identity as runtime data.
 - For router collectors, keep SSH connection hostnames separate from Home Assistant/MQTT device identity; use names such as `--ssh-host` or `--router-host` for connection targets.

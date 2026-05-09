@@ -1,5 +1,13 @@
 # homelab-ha-discovery
 
+![Python](https://img.shields.io/badge/Python-3-blue?logo=python)
+![MQTT](https://img.shields.io/badge/MQTT-publisher-660066?logo=mqtt)
+![Home Assistant](https://img.shields.io/badge/Home%20Assistant-discovery-41BDF5?logo=homeassistant)
+![Debian](https://img.shields.io/badge/Debian-13-A81D33?logo=debian)
+![License](https://img.shields.io/badge/License-MIT-green)
+
+[English](README.md) | [繁體中文](README.zh-tw.md)
+
 Python MQTT publishers for homelab metrics with Home Assistant MQTT discovery.
 
 The current runnable publishers collect metrics from the local Debian host and publish JSON payloads to MQTT. Normal runs publish retained Home Assistant discovery config first, then publish the current metric state. External systemd timer runs can use `--publisher-only` after discovery has already been registered. Long-running service mode is also available with `--timer SECONDS`.
@@ -8,7 +16,7 @@ For AI agent and repository maintenance rules, see [AGENTS.md](AGENTS.md).
 
 ## Requirements
 
-- Python 3
+- Python 3 runtime
 - `paho-mqtt`, installed from `requirements.txt`
 - `top` for CPU usage publishing
 - `nvidia-smi` for NVIDIA GPU publishing
@@ -23,9 +31,9 @@ Supported environment variables:
 - `HA_MQTT_HOST`, default `mqtt-server-ip`
 - `HA_MQTT_PORT`, default `1833`
 - `HA_MQTT_TOPIC_PREFIX`, default `homelab-ha-discovery`
-- `HA_MQTT_USERNAME`
-- `HA_MQTT_PASSWORD`
-- `HA_MQTT_CLIENT_ID`
+- `HA_MQTT_USERNAME`, optional MQTT username
+- `HA_MQTT_PASSWORD`, optional MQTT password
+- `HA_MQTT_CLIENT_ID`, optional MQTT client ID
 - `MQTT_TOPIC`, optional state-topic override
 
 Do not store MQTT credentials in this repository. For systemd services or timers, prefer an environment file outside the repo, for example `/etc/homelab-ha-discovery/mqtt.env`, readable only by the service user or root.
@@ -138,3 +146,7 @@ python3 -m py_compile src/homelab_ha_discovery/scripts/publish_gpu_metrics.py
 ```
 
 Run `pytest` if tests are present.
+
+## License
+
+This project is licensed under the MIT License. See [LICENSE](LICENSE).
