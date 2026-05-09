@@ -1,4 +1,4 @@
-"""Publish CPU usage metrics."""
+"""Publish CPU metrics."""
 
 from __future__ import annotations
 
@@ -13,6 +13,10 @@ SRC_DIR = Path(__file__).resolve().parents[2]
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
+from homelab_ha_discovery.collectors.cpu_sensors import (
+    parse_cpu_temperature,
+    run_sensors,
+)
 from homelab_ha_discovery.collectors.cpu_top import parse_cpu_usage, run_top
 from homelab_ha_discovery.discovery import (
     MetricIdentity,
@@ -32,43 +36,65 @@ DEFAULT_ENV_FILES = (
 )
 
 
-def cpu_usage_identity(
-    device: str,
-    state_topic_override: str | None = None,
-) -> MetricIdentity:
+def cpu_metrics_state_topic(device: str) -> str:
+    if not device:
+        raise ValueError("device is required")
+    return f"{mqtt_topic_prefix()}/cpu/metrics/{device}"
+
+
+def cpu_metric_identity(device: str, metric: str, state_topic: str) -> MetricIdentity:
     return MetricIdentity(
         host=device,
         component="cpu",
-        metric="usage",
-        state_topic_override=state_topic_override
-        or f"{mqtt_topic_prefix()}/cpu/usages/{device}",
+        metric=metric,
+        state_topic_override=state_topic,
     )
 
 
-def cpu_usage_client_id(device: str) -> str:
+def cpu_metrics_client_id(device: str) -> str:
     if not device:
         raise ValueError("device is required")
-    return f"homelab-ha-discovery_{device}_cpu_usage"
+    return f"homelab-ha-discovery_{device}_cpu_metrics"
 
 
-def publish_cpu_discovery(identity: MetricIdentity, device: str) -> None:
-    config = sensor_discovery_config(
-        identity,
-        name=f"{device} CPU Usage",
-        unit_of_measurement="%",
-        state_class="measurement",
-        value_template="{{ value_json['CPU Usages'] }}",
+def publish_cpu_discovery(device: str, state_topic: str) -> None:
+    configs = (
+        (
+            cpu_metric_identity(device, "usage", state_topic),
+            f"{device} CPU Usage",
+            "%",
+            None,
+            "{{ value_json['CPU Usages'] }}",
+        ),
+        (
+            cpu_metric_identity(device, "temperature", state_topic),
+            f"{device} CPU Temperature",
+            "\u00b0C",
+            "temperature",
+            "{{ value_json['Temperature'] }}",
+        ),
     )
-    payload = json.dumps(config, separators=(",", ":"))
-    publish_mqtt(
-        identity.discovery_topic,
-        payload,
-        default_client_id=cpu_usage_client_id(device),
-        retain=True,
-    )
+    for identity, name, unit_of_measurement, device_class, value_template in configs:
+        payload = json.dumps(
+            sensor_discovery_config(
+                identity,
+                name=name,
+                unit_of_measurement=unit_of_measurement,
+                device_class=device_class,
+                state_class="measurement",
+                value_template=value_template,
+            ),
+            separators=(",", ":"),
+        )
+        publish_mqtt(
+            identity.discovery_topic,
+            payload,
+            default_client_id=cpu_metrics_client_id(device),
+            retain=True,
+        )
 
 
-def publish_cpu_usage(
+def publish_cpu_metrics(
     env_files: tuple[str, ...],
     device: str,
     default_mqtt_topic: str | None = None,
@@ -76,18 +102,23 @@ def publish_cpu_usage(
 ) -> int:
     try:
         load_env_files(env_files)
-        identity = cpu_usage_identity(device)
         mqtt_topic = os.environ.get(
             "MQTT_TOPIC",
-            default_mqtt_topic or identity.state_topic,
+            default_mqtt_topic or cpu_metrics_state_topic(device),
         )
-        identity = cpu_usage_identity(device, state_topic_override=mqtt_topic)
+        metrics = {
+            "CPU Usages": parse_cpu_usage(run_top()),
+            "Temperature": parse_cpu_temperature(run_sensors()),
+        }
         if not publisher_only:
-            publish_cpu_discovery(identity, device)
+            publish_cpu_discovery(device, mqtt_topic)
 
-        cpu_usage = parse_cpu_usage(run_top())
-        payload = json.dumps({"CPU Usages": cpu_usage}, separators=(",", ":"))
-        publish_mqtt(mqtt_topic, payload, default_client_id=cpu_usage_client_id(device))
+        payload = json.dumps(metrics, separators=(",", ":"))
+        publish_mqtt(
+            mqtt_topic,
+            payload,
+            default_client_id=cpu_metrics_client_id(device),
+        )
     except Exception as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
@@ -141,7 +172,7 @@ def main(argv: list[str] | None = None) -> int:
             next_discovery_publish_at is not None
             and time.monotonic() >= next_discovery_publish_at
         )
-        result = publish_cpu_usage(
+        result = publish_cpu_metrics(
             DEFAULT_ENV_FILES,
             args.device,
             publisher_only=not publish_discovery,

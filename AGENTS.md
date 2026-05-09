@@ -18,7 +18,7 @@
 - Python 3 code for Debian homelab hosts runs on the host itself, usually via a systemd timer.
 - Python 3 code for ASUS router collectors runs on a Debian homelab host and collects router data via SSH remote commands. The user will provide the required router CLI commands.
 - Each Python 3 script runs independently. The rough code flow is:
-  - `src/homelab_ha_discovery/scripts/publish_cpu_usage.py --device <device>` -> parse CPU usage from the `top` CLI tool -> publish the data to the MQTT server.
+  - `src/homelab_ha_discovery/scripts/publish_cpu_metrics.py --device <device>` -> parse CPU usage from the `top` CLI tool and CPU temperature from the `sensors` CLI tool -> publish the data to the MQTT server.
 - MQTT payloads and discovery configuration should follow Home Assistant-compatible formats.
 - Debian homelab hosts run Debian 13 on x86_64.
 - ASUS routers are ASUS WiFi routers.
@@ -54,7 +54,7 @@ Required MQTT/Home Assistant conventions:
 - Discovery config publishes should use `publish_mqtt(..., retain=True)`.
 - Metric state publishes should remain non-retained by default.
 - Discovery config must point to the exact state topic used by the metric publish, including any supported topic override.
-- CPU usage currently publishes state to `<prefix>/cpu/usages/<device>` with payload `{"CPU Usages":<percent>}` and discovery topic `homeassistant/sensor/homelab_ha_discovery_<device>_cpu_usage/config`.
+- CPU metrics publish state to `<prefix>/cpu/metrics/<device>` with payload `{"CPU Usages":<percent>,"Temperature":<celsius>}`. Discovery topics are `homeassistant/sensor/homelab_ha_discovery_<device>_cpu_usage/config` and `homeassistant/sensor/homelab_ha_discovery_<device>_cpu_temperature/config`.
 - GPU metrics publish one nested state payload. When `--gpu` is omitted, publish all detected GPUs in `nvidia-smi` row order to `<prefix>/gpu/usages/<device>` as `gpu0`, `gpu1`, and so on. Each GPU object includes `GPU Card Name`, `GPU Usages`, `Memory Usage`, and `Temperature`.
 - When GPU metrics use `--gpu INDEX`, publish only `gpu<INDEX>` to `<prefix>/gpu/usages/<device>/gpu<INDEX>`. If `INDEX` is out of range, exit with an error before publishing discovery config or state.
 - GPU discovery should expose separate sensors for every included GPU metric, for example `homeassistant/sensor/homelab_ha_discovery_<device>_gpu0_usage/config`, `homeassistant/sensor/homelab_ha_discovery_<device>_gpu0_memory_usage/config`, and `homeassistant/sensor/homelab_ha_discovery_<device>_gpu0_temperature/config`. Discovery value templates should read from the nested GPU object, for example `{{ value_json['gpu0']['GPU Usages'] }}`. Do not create a sensor for `GPU Card Name`; it is payload metadata only.

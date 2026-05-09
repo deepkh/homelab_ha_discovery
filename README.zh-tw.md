@@ -18,7 +18,7 @@ AI agent 和 repository 維護規則請見 [AGENTS.md](AGENTS.md)。
 
 - Python 3 執行環境
 - 從 `requirements.txt` 安裝的 `paho-mqtt`
-- 用於 CPU 使用率發布的 `top`
+- 用於 CPU 指標發布的 `top` 和 `sensors`。在 Debian 上，`sensors` 由 `lm-sensors` 提供。
 - 用於 NVIDIA GPU 發布的 `nvidia-smi`
 - MQTT broker 存取權限
 
@@ -90,10 +90,10 @@ HA_MQTT_PASSWORD=your-password
 
 請從 repository root 執行。
 
-CPU 使用率：
+CPU 指標：
 
 ```bash
-python3 src/homelab_ha_discovery/scripts/publish_cpu_usage.py --device hpc
+python3 src/homelab_ha_discovery/scripts/publish_cpu_metrics.py --device hpc
 ```
 
 NVIDIA GPU 指標：
@@ -113,14 +113,14 @@ python3 src/homelab_ha_discovery/scripts/publish_gpu_metrics.py --device hpc --g
 若要頻繁透過 systemd timer 執行，請在一般執行已註冊 discovery config 後使用 `--publisher-only`：
 
 ```bash
-python3 src/homelab_ha_discovery/scripts/publish_cpu_usage.py --device hpc --publisher-only
+python3 src/homelab_ha_discovery/scripts/publish_cpu_metrics.py --device hpc --publisher-only
 python3 src/homelab_ha_discovery/scripts/publish_gpu_metrics.py --device hpc --publisher-only
 ```
 
 若要使用長時間執行的服務模式，請使用 `--timer SECONDS`。第一次指標發布會立即發生，之後腳本會在每次發布嘗試之間休眠：
 
 ```bash
-python3 src/homelab_ha_discovery/scripts/publish_cpu_usage.py --device hpc --timer 5.0
+python3 src/homelab_ha_discovery/scripts/publish_cpu_metrics.py --device hpc --timer 5.0
 python3 src/homelab_ha_discovery/scripts/publish_gpu_metrics.py --device hpc --timer 5.0
 ```
 
@@ -129,7 +129,7 @@ python3 src/homelab_ha_discovery/scripts/publish_gpu_metrics.py --device hpc --t
 若要在長時間執行的服務模式中定期重新發布保留的 discovery config，請加入 `--timer-publish-discovery-config SECONDS`：
 
 ```bash
-python3 src/homelab_ha_discovery/scripts/publish_cpu_usage.py --device hpc --timer 5.0 --timer-publish-discovery-config 60.0
+python3 src/homelab_ha_discovery/scripts/publish_cpu_metrics.py --device hpc --timer 5.0 --timer-publish-discovery-config 60.0
 python3 src/homelab_ha_discovery/scripts/publish_gpu_metrics.py --device hpc --timer 5.0 --timer-publish-discovery-config 60.0
 ```
 
@@ -139,22 +139,23 @@ python3 src/homelab_ha_discovery/scripts/publish_gpu_metrics.py --device hpc --t
 
 ## MQTT Topics
 
-使用預設 topic prefix 和 `--device hpc` 時，CPU 使用率會將 state 發布到：
+使用預設 topic prefix 和 `--device hpc` 時，CPU 指標會將 state 發布到：
 
 ```text
-homelab-ha-discovery/cpu/usages/hpc
+homelab-ha-discovery/cpu/metrics/hpc
 ```
 
 Payload：
 
 ```json
-{"CPU Usages":37.8}
+{"CPU Usages":37.8,"Temperature":54.0}
 ```
 
-Discovery topic：
+Discovery topics：
 
 ```text
 homeassistant/sensor/homelab_ha_discovery_hpc_cpu_usage/config
+homeassistant/sensor/homelab_ha_discovery_hpc_cpu_temperature/config
 ```
 
 未指定 `--gpu` 時，NVIDIA GPU 指標會將 state 發布到：
@@ -203,7 +204,8 @@ Collectors 位於 `src/homelab_ha_discovery/collectors/`；可執行腳本位於
 ```bash
 python3 -m py_compile src/homelab_ha_discovery/mqtt.py
 python3 -m py_compile src/homelab_ha_discovery/scripts/timer.py
-python3 -m py_compile src/homelab_ha_discovery/scripts/publish_cpu_usage.py
+python3 -m py_compile src/homelab_ha_discovery/collectors/cpu_sensors.py
+python3 -m py_compile src/homelab_ha_discovery/scripts/publish_cpu_metrics.py
 python3 -m py_compile src/homelab_ha_discovery/collectors/gpu_nvidia.py
 python3 -m py_compile src/homelab_ha_discovery/scripts/publish_gpu_metrics.py
 ```

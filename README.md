@@ -18,7 +18,7 @@ For AI agent and repository maintenance rules, see [AGENTS.md](AGENTS.md).
 
 - Python 3 runtime
 - `paho-mqtt`, installed from `requirements.txt`
-- `top` for CPU usage publishing
+- `top` and `sensors` for CPU metrics publishing. On Debian, `sensors` is provided by `lm-sensors`.
 - `nvidia-smi` for NVIDIA GPU publishing
 - MQTT broker access
 
@@ -90,10 +90,10 @@ HA_MQTT_PASSWORD=your-password
 
 Run from the repository root.
 
-CPU usage:
+CPU metrics:
 
 ```bash
-python3 src/homelab_ha_discovery/scripts/publish_cpu_usage.py --device hpc
+python3 src/homelab_ha_discovery/scripts/publish_cpu_metrics.py --device hpc
 ```
 
 NVIDIA GPU metrics:
@@ -113,14 +113,14 @@ python3 src/homelab_ha_discovery/scripts/publish_gpu_metrics.py --device hpc --g
 For frequent systemd timer runs, use `--publisher-only` after a normal run has registered discovery config:
 
 ```bash
-python3 src/homelab_ha_discovery/scripts/publish_cpu_usage.py --device hpc --publisher-only
+python3 src/homelab_ha_discovery/scripts/publish_cpu_metrics.py --device hpc --publisher-only
 python3 src/homelab_ha_discovery/scripts/publish_gpu_metrics.py --device hpc --publisher-only
 ```
 
 For long-running service mode, use `--timer SECONDS`. The first metric publish happens immediately, then the script sleeps between publish attempts:
 
 ```bash
-python3 src/homelab_ha_discovery/scripts/publish_cpu_usage.py --device hpc --timer 5.0
+python3 src/homelab_ha_discovery/scripts/publish_cpu_metrics.py --device hpc --timer 5.0
 python3 src/homelab_ha_discovery/scripts/publish_gpu_metrics.py --device hpc --timer 5.0
 ```
 
@@ -129,7 +129,7 @@ Without `--publisher-only`, `--timer` publishes discovery config once at startup
 To republish retained discovery config periodically during long-running service mode, add `--timer-publish-discovery-config SECONDS`:
 
 ```bash
-python3 src/homelab_ha_discovery/scripts/publish_cpu_usage.py --device hpc --timer 5.0 --timer-publish-discovery-config 60.0
+python3 src/homelab_ha_discovery/scripts/publish_cpu_metrics.py --device hpc --timer 5.0 --timer-publish-discovery-config 60.0
 python3 src/homelab_ha_discovery/scripts/publish_gpu_metrics.py --device hpc --timer 5.0 --timer-publish-discovery-config 60.0
 ```
 
@@ -139,22 +139,23 @@ The hidden `--host` argument is accepted as a compatibility alias for `--device`
 
 ## MQTT Topics
 
-With the default topic prefix and `--device hpc`, CPU usage publishes state to:
+With the default topic prefix and `--device hpc`, CPU metrics publish state to:
 
 ```text
-homelab-ha-discovery/cpu/usages/hpc
+homelab-ha-discovery/cpu/metrics/hpc
 ```
 
 Payload:
 
 ```json
-{"CPU Usages":37.8}
+{"CPU Usages":37.8,"Temperature":54.0}
 ```
 
-Discovery topic:
+Discovery topics:
 
 ```text
 homeassistant/sensor/homelab_ha_discovery_hpc_cpu_usage/config
+homeassistant/sensor/homelab_ha_discovery_hpc_cpu_temperature/config
 ```
 
 NVIDIA GPU metrics publish state to this topic when `--gpu` is omitted:
@@ -203,7 +204,8 @@ Relevant validation commands:
 ```bash
 python3 -m py_compile src/homelab_ha_discovery/mqtt.py
 python3 -m py_compile src/homelab_ha_discovery/scripts/timer.py
-python3 -m py_compile src/homelab_ha_discovery/scripts/publish_cpu_usage.py
+python3 -m py_compile src/homelab_ha_discovery/collectors/cpu_sensors.py
+python3 -m py_compile src/homelab_ha_discovery/scripts/publish_cpu_metrics.py
 python3 -m py_compile src/homelab_ha_discovery/collectors/gpu_nvidia.py
 python3 -m py_compile src/homelab_ha_discovery/scripts/publish_gpu_metrics.py
 ```
