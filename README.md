@@ -22,6 +22,44 @@ For AI agent and repository maintenance rules, see [AGENTS.md](AGENTS.md).
 - `nvidia-smi` for NVIDIA GPU publishing
 - MQTT broker access
 
+## Setup
+
+These instructions are for human operators.
+
+### Install Python 3
+
+```bash
+sudo apt update
+sudo apt install -y python3 python3-venv python3-pip curl ca-certificates
+```
+
+### Create Python 3 virtual environment
+
+Only if `.venv/` does not exist or is empty, create the virtual environment with:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+```
+
+### Install necessary libs to `.venv` for Python 3 (optional)
+
+```bash
+pip install paho-mqtt
+```
+
+### Install necessary libs from `requirements.txt`
+
+```bash
+pip install -r requirements.txt
+```
+
+### Dump `.venv/` installed libs to `requirements.txt`
+
+```bash
+pip freeze > requirements.txt
+```
+
 ## Configuration
 
 The scripts read MQTT settings from the environment and also try to load `/etc/homelab-ha-discovery/mqtt.env`.

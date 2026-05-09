@@ -22,6 +22,44 @@ AI agent 和 repository 維護規則請見 [AGENTS.md](AGENTS.md)。
 - 用於 NVIDIA GPU 發布的 `nvidia-smi`
 - MQTT broker 存取權限
 
+## 安裝設定
+
+這些指示提供給人工操作人員使用。
+
+### 安裝 Python 3
+
+```bash
+sudo apt update
+sudo apt install -y python3 python3-venv python3-pip curl ca-certificates
+```
+
+### 建立 Python 3 虛擬環境
+
+只有在 `.venv/` 不存在或是空的時候，才建立虛擬環境：
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+```
+
+### 將 Python 3 所需套件安裝到 `.venv`（選用）
+
+```bash
+pip install paho-mqtt
+```
+
+### 從 `requirements.txt` 安裝所需套件
+
+```bash
+pip install -r requirements.txt
+```
+
+### 將 `.venv/` 已安裝套件匯出到 `requirements.txt`
+
+```bash
+pip freeze > requirements.txt
+```
+
 ## 設定
 
 腳本會從環境變數讀取 MQTT 設定，也會嘗試載入 `/etc/homelab-ha-discovery/mqtt.env`。
