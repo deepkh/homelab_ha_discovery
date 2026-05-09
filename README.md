@@ -20,6 +20,7 @@ For AI agent and repository maintenance rules, see [AGENTS.md](AGENTS.md).
 - `paho-mqtt`, installed from `requirements.txt`
 - `top` and `sensors` for CPU metrics publishing. On Debian, `sensors` is provided by `lm-sensors`.
 - `nvidia-smi` for NVIDIA GPU publishing
+- `smartctl` for disk SMART publishing. On Debian, `smartctl` is provided by `smartmontools`.
 - MQTT broker access
 
 ## Setup
@@ -110,11 +111,24 @@ zero-based index:
 python3 src/homelab_ha_discovery/scripts/publish_gpu_metrics.py --device hpc --gpu 0
 ```
 
+Disk SMART metrics:
+
+```bash
+python3 src/homelab_ha_discovery/scripts/publish_sdx_metrics.py --device hpc --dev /dev/sda
+```
+
+The SMART publisher runs `sudo smartctl -a <dev>` locally. Configure sudo
+outside this repository so the service user can run the required `smartctl`
+command non-interactively. The disk component in MQTT and Home Assistant
+discovery is derived from the `--dev` basename, for example `sda` for
+`/dev/sda`.
+
 For frequent systemd timer runs, use `--publisher-only` after a normal run has registered discovery config:
 
 ```bash
 python3 src/homelab_ha_discovery/scripts/publish_cpu_metrics.py --device hpc --publisher-only
 python3 src/homelab_ha_discovery/scripts/publish_gpu_metrics.py --device hpc --publisher-only
+python3 src/homelab_ha_discovery/scripts/publish_sdx_metrics.py --device hpc --dev /dev/sda --publisher-only
 ```
 
 For long-running service mode, use `--timer SECONDS`. The first metric publish happens immediately, then the script sleeps between publish attempts:
@@ -122,6 +136,7 @@ For long-running service mode, use `--timer SECONDS`. The first metric publish h
 ```bash
 python3 src/homelab_ha_discovery/scripts/publish_cpu_metrics.py --device hpc --timer 5.0
 python3 src/homelab_ha_discovery/scripts/publish_gpu_metrics.py --device hpc --timer 5.0
+python3 src/homelab_ha_discovery/scripts/publish_sdx_metrics.py --device hpc --dev /dev/sda --timer 5.0
 ```
 
 Without `--publisher-only`, `--timer` publishes discovery config once at startup, then publishes only metric state each interval. With `--timer --publisher-only`, it publishes only metric state each interval.
@@ -131,6 +146,7 @@ To republish retained discovery config periodically during long-running service 
 ```bash
 python3 src/homelab_ha_discovery/scripts/publish_cpu_metrics.py --device hpc --timer 5.0 --timer-publish-discovery-config 60.0
 python3 src/homelab_ha_discovery/scripts/publish_gpu_metrics.py --device hpc --timer 5.0 --timer-publish-discovery-config 60.0
+python3 src/homelab_ha_discovery/scripts/publish_sdx_metrics.py --device hpc --dev /dev/sda --timer 5.0 --timer-publish-discovery-config 60.0
 ```
 
 If `--timer-publish-discovery-config` is not set, timer behavior stays discovery-once. This option requires `--timer` and cannot be combined with `--publisher-only`.
@@ -193,6 +209,34 @@ homeassistant/sensor/homelab_ha_discovery_hpc_gpu0_temperature/config
 `GPU Card Name` is included as payload metadata only; no Home Assistant sensor is
 created for it.
 
+With `--dev /dev/sda`, disk SMART metrics publish state to:
+
+```text
+homelab-ha-discovery/sda/metrics/hpc
+```
+
+Payload:
+
+```json
+{"Power On Hours":3103,"Temperature":42,"Reallocated Sectors":0,"Pending Sectors":0}
+```
+
+Discovery topics:
+
+```text
+homeassistant/sensor/homelab_ha_discovery_hpc_sda_power_on_hours/config
+homeassistant/sensor/homelab_ha_discovery_hpc_sda_temperature/config
+homeassistant/sensor/homelab_ha_discovery_hpc_sda_reallocated_sectors/config
+homeassistant/sensor/homelab_ha_discovery_hpc_sda_pending_sectors/config
+```
+
+The Home Assistant sensor names also use the disk component, for example
+`hpc sda Power On Hours`. Because the disk component is included in Home
+Assistant unique IDs, changing `--dev` changes the entities.
+
+If `MQTT_TOPIC` is set, publishers use it as the state topic and discovery config
+points to that exact topic.
+
 Discovery config is retained. Metric state is non-retained by default.
 
 ## Development
@@ -208,6 +252,8 @@ python3 -m py_compile src/homelab_ha_discovery/collectors/cpu_sensors.py
 python3 -m py_compile src/homelab_ha_discovery/scripts/publish_cpu_metrics.py
 python3 -m py_compile src/homelab_ha_discovery/collectors/gpu_nvidia.py
 python3 -m py_compile src/homelab_ha_discovery/scripts/publish_gpu_metrics.py
+python3 -m py_compile src/homelab_ha_discovery/collectors/disk_smart.py
+python3 -m py_compile src/homelab_ha_discovery/scripts/publish_sdx_metrics.py
 ```
 
 Run `pytest` if tests are present.

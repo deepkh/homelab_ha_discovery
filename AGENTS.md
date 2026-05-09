@@ -19,6 +19,7 @@
 - Python 3 code for ASUS router collectors runs on a Debian homelab host and collects router data via SSH remote commands. The user will provide the required router CLI commands.
 - Each Python 3 script runs independently. The rough code flow is:
   - `src/homelab_ha_discovery/scripts/publish_cpu_metrics.py --device <device>` -> parse CPU usage from the `top` CLI tool and CPU temperature from the `sensors` CLI tool -> publish the data to the MQTT server.
+  - `src/homelab_ha_discovery/scripts/publish_sdx_metrics.py --device <device> --dev <path>` -> run `sudo smartctl -a <path>` locally, parse disk SMART attributes, derive the disk component from the device path basename such as `sda` for `/dev/sda` -> publish the data to the MQTT server.
 - MQTT payloads and discovery configuration should follow Home Assistant-compatible formats.
 - Debian homelab hosts run Debian 13 on x86_64.
 - ASUS routers are ASUS WiFi routers.
@@ -58,6 +59,8 @@ Required MQTT/Home Assistant conventions:
 - GPU metrics publish one nested state payload. When `--gpu` is omitted, publish all detected GPUs in `nvidia-smi` row order to `<prefix>/gpu/usages/<device>` as `gpu0`, `gpu1`, and so on. Each GPU object includes `GPU Card Name`, `GPU Usages`, `Memory Usage`, and `Temperature`.
 - When GPU metrics use `--gpu INDEX`, publish only `gpu<INDEX>` to `<prefix>/gpu/usages/<device>/gpu<INDEX>`. If `INDEX` is out of range, exit with an error before publishing discovery config or state.
 - GPU discovery should expose separate sensors for every included GPU metric, for example `homeassistant/sensor/homelab_ha_discovery_<device>_gpu0_usage/config`, `homeassistant/sensor/homelab_ha_discovery_<device>_gpu0_memory_usage/config`, and `homeassistant/sensor/homelab_ha_discovery_<device>_gpu0_temperature/config`. Discovery value templates should read from the nested GPU object, for example `{{ value_json['gpu0']['GPU Usages'] }}`. Do not create a sensor for `GPU Card Name`; it is payload metadata only.
+- Disk SMART metrics run `sudo smartctl -a <dev>` locally with `LC_ALL=C`, parse SMART attribute IDs `9`, `194`, `5`, and `197`, and publish state to `<prefix>/<disk>/metrics/<device>` with payload `{"Power On Hours":<hours>,"Temperature":<celsius>,"Reallocated Sectors":<count>,"Pending Sectors":<count>}`. The `<disk>` component is the normalized basename of `--dev`, for example `sda` for `/dev/sda`. If any required SMART metric is missing or unparsable, exit with an error before publishing discovery config or state.
+- Disk SMART discovery topics include the disk component, for example `homeassistant/sensor/homelab_ha_discovery_<device>_sda_power_on_hours/config`, `homeassistant/sensor/homelab_ha_discovery_<device>_sda_temperature/config`, `homeassistant/sensor/homelab_ha_discovery_<device>_sda_reallocated_sectors/config`, and `homeassistant/sensor/homelab_ha_discovery_<device>_sda_pending_sectors/config` for `--dev /dev/sda`. Discovery value templates should read from the shared JSON payload. The disk component is included in Home Assistant unique IDs so multiple disks on one device can be monitored separately.
 
 ## Home Assistant cleanup
 This project was renamed from `homelab-mqtt-monitor` to `homelab-ha-discovery`.
@@ -68,6 +71,7 @@ Do not publish deletion payloads to the MQTT broker unless the user explicitly a
 - You may run localhost health checks and project tests.
 - Ask before destructive commands such as deleting files, changing git history, or stopping containers.
 - Prefer minimal validation commands first.
+- Do not run `sudo smartctl` against real disks unless the user explicitly asks.
 - Do not run SSH commands against routers or homelab servers unless the user explicitly asks.
 - Do not publish test MQTT messages to the real broker unless the user explicitly asks.
 - Prefer parsing saved sample command output locally when possible.
