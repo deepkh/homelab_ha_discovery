@@ -8,6 +8,7 @@
 ## Folder Layout
 .
 ├── AGENTS.md
+├── README.md
 └── src
     ├── homelab_ha_discovery
     │   ├── collectors
@@ -22,10 +23,10 @@
 - ASUS routers are ASUS WiFi routers.
  
 ## Local services
-MQTT server: `mqtt.netsync.tv:1833`.
+MQTT server: `mqtt-server-ip:1833`.
 
 Recommended environment variables:
-- `HA_MQTT_HOST=mqtt.netsync.tv`
+- `HA_MQTT_HOST=mqtt-server-ip`
 - `HA_MQTT_PORT=1833`
 - `HA_MQTT_TOPIC_PREFIX=homelab-ha-discovery`
 - `HA_MQTT_USERNAME=...`
@@ -42,6 +43,18 @@ Required MQTT/Home Assistant conventions:
 - Use predictable discovery topics, for example `homeassistant/sensor/homelab_ha_discovery_<device>_<component>_<metric>/config`.
 - Publish Home Assistant discovery config when the script supports discovery, unless the existing script uses another pattern.
 - Keep device names and identifiers stable so Home Assistant does not create duplicate entities.
+
+## Home Assistant auto-discovery
+- Scripts that support Home Assistant MQTT discovery should publish retained discovery config on normal/manual runs, then publish the current metric state.
+- Use `--publisher-only` for frequent systemd timer runs after discovery config has already been registered.
+- Scripts that support `--timer SECONDS` run as long-running publishers: publish immediately, then repeat every positive `SECONDS`.
+- For `--timer` runs without `--publisher-only`, publish discovery config once at startup, then publish metric state each interval. For `--timer --publisher-only`, publish only metric state each interval.
+- Scripts may support `--timer-publish-discovery-config SECONDS` with `--timer` to republish retained discovery config periodically. Without this option, keep the discovery-once timer behavior. Do not combine it with `--publisher-only`.
+- Discovery config publishes should use `publish_mqtt(..., retain=True)`.
+- Metric state publishes should remain non-retained by default.
+- Discovery config must point to the exact state topic used by the metric publish, including any supported topic override.
+- CPU usage currently publishes state to `<prefix>/cpu/usages/<device>` with payload `{"CPU Usages":<percent>}` and discovery topic `homeassistant/sensor/homelab_ha_discovery_<device>_cpu_usage/config`.
+- GPU metrics currently publish one state payload to `<prefix>/gpu/usages/<device>` with `GPU Usages` and `Memory Usage`; discovery should expose separate sensors for `gpu_usage` and `gpu_memory_usage` from that shared state topic.
 
 ## Home Assistant cleanup
 This project was renamed from `homelab-mqtt-monitor` to `homelab-ha-discovery`.
@@ -64,6 +77,8 @@ Do not publish deletion payloads to the MQTT broker unless the user explicitly a
 - Do not rename or move files unless necessary.
 - Do not update `requirements.txt` unless explicitly asked.
 - Keep changes scoped to the requested script.
+- Every code change must include a documentation check for `AGENTS.md` and `README.md`; update both in the same change when behavior, commands, topics, environment variables, setup, validation, or user-facing usage changes.
+- If `README.md` is absent when a code change needs user-facing documentation, report that in the final response instead of silently leaving the documentation gap.
 - Add shared helpers only when the user asks or when existing duplicated logic makes the change clearly safer.
 - Do not introduce device-specific folders for Debian homelab hosts; pass device identity as runtime data.
 - For router collectors, keep SSH connection hostnames separate from Home Assistant/MQTT device identity; use names such as `--ssh-host` or `--router-host` for connection targets.

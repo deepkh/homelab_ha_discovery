@@ -7,7 +7,7 @@ import socket
 import sys
 
 
-DEFAULT_MQTT_HOST = "mqtt.netsync.tv"
+DEFAULT_MQTT_HOST = "mqtt-server-ip"
 DEFAULT_MQTT_PORT = 1833
 MQTT_KEEPALIVE_SECONDS = 60
 MQTT_CONNECT_TIMEOUT_SECONDS = 10

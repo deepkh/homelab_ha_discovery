@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import sys
+import time
 
 SRC_DIR = Path(__file__).resolve().parents[2]
 if str(SRC_DIR) not in sys.path:
@@ -20,6 +21,10 @@ from homelab_ha_discovery.discovery import (
 )
 from homelab_ha_discovery.env import load_env_files
 from homelab_ha_discovery.mqtt import publish_mqtt
+from homelab_ha_discovery.scripts.timer import (
+    run_publish_timer,
+    validate_timer_seconds,
+)
 
 
 DEFAULT_ENV_FILES = (
@@ -99,14 +104,58 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Publish metric state without Home Assistant discovery config.",
     )
+    parser.add_argument(
+        "--timer",
+        type=float,
+        help="Publish continuously every SECONDS instead of exiting after one run.",
+    )
+    parser.add_argument(
+        "--timer-publish-discovery-config",
+        type=float,
+        metavar="SECONDS",
+        help=(
+            "Republish Home Assistant discovery config every SECONDS during --timer "
+            "runs."
+        ),
+    )
     args = parser.parse_args(argv)
     if not args.device:
         parser.error("the following arguments are required: --device")
-    return publish_cpu_usage(
-        DEFAULT_ENV_FILES,
-        args.device,
-        publisher_only=args.publisher_only,
-    )
+    if args.timer_publish_discovery_config is not None and args.timer is None:
+        parser.error("--timer-publish-discovery-config requires --timer")
+    if args.timer_publish_discovery_config is not None and args.publisher_only:
+        parser.error(
+            "--timer-publish-discovery-config cannot be used with --publisher-only"
+        )
+    if not validate_timer_seconds(
+        args.timer_publish_discovery_config,
+        "--timer-publish-discovery-config",
+    ):
+        return 1
+
+    next_discovery_publish_at = 0.0 if not args.publisher_only else None
+
+    def publish() -> int:
+        nonlocal next_discovery_publish_at
+        publish_discovery = (
+            next_discovery_publish_at is not None
+            and time.monotonic() >= next_discovery_publish_at
+        )
+        result = publish_cpu_usage(
+            DEFAULT_ENV_FILES,
+            args.device,
+            publisher_only=not publish_discovery,
+        )
+        if result == 0 and publish_discovery:
+            if args.timer_publish_discovery_config is None:
+                next_discovery_publish_at = None
+            else:
+                next_discovery_publish_at = (
+                    time.monotonic() + args.timer_publish_discovery_config
+                )
+        return result
+
+    return run_publish_timer(args.timer, publish)
 
 
 if __name__ == "__main__":
