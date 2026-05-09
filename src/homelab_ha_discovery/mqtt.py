@@ -16,7 +16,7 @@ MQTT_CONNECT_TIMEOUT_SECONDS = 10
 def publish_mqtt(
     topic: str,
     payload: str,
-    default_client_id: str = "homelab-mqtt-monitor",
+    default_client_id: str = "homelab-ha-discovery",
 ) -> None:
     import paho.mqtt.client as mqtt
 

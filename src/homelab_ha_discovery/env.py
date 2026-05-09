@@ -1,4 +1,4 @@
-"""Load environment files for homelab monitor scripts."""
+"""Load environment files for homelab Home Assistant discovery scripts."""
 
 from __future__ import annotations
 

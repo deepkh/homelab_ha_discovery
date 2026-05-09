@@ -6,7 +6,8 @@ from dataclasses import dataclass
 import os
 
 
-DEFAULT_TOPIC_PREFIX = "homelab-mqtt-monitor"
+DEFAULT_TOPIC_PREFIX = "homelab-ha-discovery"
+DEFAULT_OBJECT_ID_PREFIX = "homelab_ha_discovery"
 
 
 def mqtt_topic_prefix() -> str:
@@ -31,7 +32,7 @@ class MetricIdentity:
 
     @property
     def object_id(self) -> str:
-        return f"{self.host}_{self.component}_{self.metric}"
+        return f"{DEFAULT_OBJECT_ID_PREFIX}_{self.host}_{self.component}_{self.metric}"
 
     @property
     def unique_id(self) -> str:

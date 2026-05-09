@@ -12,14 +12,14 @@ SRC_DIR = Path(__file__).resolve().parents[2]
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from homelab_monitor.collectors.gpu_nvidia import parse_gpu_metrics, run_nvidia_smi
-from homelab_monitor.discovery import MetricIdentity, mqtt_topic_prefix
-from homelab_monitor.env import load_env_files
-from homelab_monitor.mqtt import publish_mqtt
+from homelab_ha_discovery.collectors.gpu_nvidia import parse_gpu_metrics, run_nvidia_smi
+from homelab_ha_discovery.discovery import MetricIdentity, mqtt_topic_prefix
+from homelab_ha_discovery.env import load_env_files
+from homelab_ha_discovery.mqtt import publish_mqtt
 
 
 DEFAULT_ENV_FILES = (
-    "/etc/homelab-mqtt-monitor/mqtt.env",
+    "/etc/homelab-ha-discovery/mqtt.env",
 )
 
 
@@ -35,7 +35,7 @@ def gpu_metrics_identity(host: str) -> MetricIdentity:
 def gpu_metrics_client_id(host: str) -> str:
     if not host:
         raise ValueError("host is required")
-    return f"homelab-mqtt-monitor_{host}_gpu_metrics"
+    return f"homelab-ha-discovery_{host}_gpu_metrics"
 
 
 def publish_gpu_metrics(

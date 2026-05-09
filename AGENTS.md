@@ -9,14 +9,14 @@
 .
 ├── AGENTS.md
 └── src
-    ├── homelab_monitor
+    ├── homelab_ha_discovery
     │   ├── collectors
     │   └── scripts
 - Host identity is runtime data, not a folder split. Shared scripts should accept a host value and use it for MQTT topics, Home Assistant unique IDs, and device identifiers.
 - Python 3 code for Debian homelab hosts runs on the host itself, usually via a systemd timer.
 - Python 3 code for ASUS router collectors runs on a Debian homelab host and collects router data via SSH remote commands. The user will provide the required router CLI commands.
 - Each Python 3 script runs independently. The rough code flow is:
-  - `src/homelab_monitor/scripts/publish_cpu_usage.py --host <host>` -> parse CPU usage from the `top` CLI tool -> publish the data to the MQTT server.
+  - `src/homelab_ha_discovery/scripts/publish_cpu_usage.py --host <host>` -> parse CPU usage from the `top` CLI tool -> publish the data to the MQTT server.
 - MQTT payloads and discovery configuration should follow Home Assistant-compatible formats.
 - Debian homelab hosts run Debian 13 on x86_64.
 - ASUS routers are ASUS WiFi routers.
@@ -27,21 +27,26 @@ MQTT server: `mqtt.netsync.tv:1833`.
 Recommended environment variables:
 - `HA_MQTT_HOST=mqtt.netsync.tv`
 - `HA_MQTT_PORT=1833`
-- `HA_MQTT_TOPIC_PREFIX=homelab-mqtt-monitor`
+- `HA_MQTT_TOPIC_PREFIX=homelab-ha-discovery`
 - `HA_MQTT_USERNAME=...`
 - `HA_MQTT_PASSWORD=...`
 
-For human operators, environment variables can be loaded from `/etc/homelab-mqtt-monitor/mqtt.env`. AI agents must not export credentials or run setup commands unless explicitly asked.
+For human operators, environment variables can be loaded from `/etc/homelab-ha-discovery/mqtt.env`. AI agents must not export credentials or run setup commands unless explicitly asked.
 
-Do not store MQTT credentials in this repository. For systemd services or timers, prefer an environment file outside the repo, for example `/etc/homelab-mqtt-monitor/mqtt.env`, referenced by service files with `EnvironmentFile=/etc/homelab-mqtt-monitor/mqtt.env`. The file should be readable only by the service user or root.
+Do not store MQTT credentials in this repository. For systemd services or timers, prefer an environment file outside the repo, for example `/etc/homelab-ha-discovery/mqtt.env`, referenced by service files with `EnvironmentFile=/etc/homelab-ha-discovery/mqtt.env`. The file should be readable only by the service user or root.
 
 Required MQTT/Home Assistant conventions:
 - Use stable `unique_id` values based on host, component, and metric name.
-- Use `HA_MQTT_TOPIC_PREFIX` for the root topic prefix, defaulting to `homelab-mqtt-monitor`.
+- Use `HA_MQTT_TOPIC_PREFIX` for the root topic prefix, defaulting to `homelab-ha-discovery`.
 - Use predictable state topics, for example `<prefix>/<host>/<component>/<metric>/state`.
-- Use predictable discovery topics, for example `homeassistant/sensor/<host>_<component>_<metric>/config`.
+- Use predictable discovery topics, for example `homeassistant/sensor/homelab_ha_discovery_<host>_<component>_<metric>/config`.
 - Publish Home Assistant discovery config when the script supports discovery, unless the existing script uses another pattern.
 - Keep device names and identifiers stable so Home Assistant does not create duplicate entities.
+
+## Home Assistant cleanup
+This project was renamed from `homelab-mqtt-monitor` to `homelab-ha-discovery`.
+Old Home Assistant entities or retained discovery configs using `homelab-mqtt-monitor` may need manual cleanup.
+Do not publish deletion payloads to the MQTT broker unless the user explicitly asks for a cleanup operation.
 
 ## Command safety
 - You may run localhost health checks and project tests.

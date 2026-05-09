@@ -12,14 +12,14 @@ SRC_DIR = Path(__file__).resolve().parents[2]
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from homelab_monitor.collectors.cpu_top import parse_cpu_usage, run_top
-from homelab_monitor.discovery import MetricIdentity, mqtt_topic_prefix
-from homelab_monitor.env import load_env_files
-from homelab_monitor.mqtt import publish_mqtt
+from homelab_ha_discovery.collectors.cpu_top import parse_cpu_usage, run_top
+from homelab_ha_discovery.discovery import MetricIdentity, mqtt_topic_prefix
+from homelab_ha_discovery.env import load_env_files
+from homelab_ha_discovery.mqtt import publish_mqtt
 
 
 DEFAULT_ENV_FILES = (
-    "/etc/homelab-mqtt-monitor/mqtt.env",
+    "/etc/homelab-ha-discovery/mqtt.env",
 )
 
 
@@ -35,7 +35,7 @@ def cpu_usage_identity(host: str) -> MetricIdentity:
 def cpu_usage_client_id(host: str) -> str:
     if not host:
         raise ValueError("host is required")
-    return f"homelab-mqtt-monitor_{host}_cpu_usage"
+    return f"homelab-ha-discovery_{host}_cpu_usage"
 
 
 def publish_cpu_usage(
