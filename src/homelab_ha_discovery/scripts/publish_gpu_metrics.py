@@ -23,32 +23,32 @@ DEFAULT_ENV_FILES = (
 )
 
 
-def gpu_metrics_identity(host: str) -> MetricIdentity:
+def gpu_metrics_identity(device: str) -> MetricIdentity:
     return MetricIdentity(
-        host=host,
+        host=device,
         component="gpu",
         metric="metrics",
-        state_topic_override=f"{mqtt_topic_prefix()}/gpu/usages/{host}",
+        state_topic_override=f"{mqtt_topic_prefix()}/gpu/usages/{device}",
     )
 
 
-def gpu_metrics_client_id(host: str) -> str:
-    if not host:
-        raise ValueError("host is required")
-    return f"homelab-ha-discovery_{host}_gpu_metrics"
+def gpu_metrics_client_id(device: str) -> str:
+    if not device:
+        raise ValueError("device is required")
+    return f"homelab-ha-discovery_{device}_gpu_metrics"
 
 
 def publish_gpu_metrics(
     env_files: tuple[str, ...],
-    host: str,
+    device: str,
     default_mqtt_topic: str | None = None,
 ) -> int:
     try:
         load_env_files(env_files)
-        identity = gpu_metrics_identity(host)
+        identity = gpu_metrics_identity(device)
         payload = json.dumps(parse_gpu_metrics(run_nvidia_smi()), separators=(",", ":"))
         mqtt_topic = os.environ.get("MQTT_TOPIC", default_mqtt_topic or identity.state_topic)
-        publish_mqtt(mqtt_topic, payload, default_client_id=gpu_metrics_client_id(host))
+        publish_mqtt(mqtt_topic, payload, default_client_id=gpu_metrics_client_id(device))
     except Exception as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
@@ -58,9 +58,12 @@ def publish_gpu_metrics(
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--host", required=True)
+    parser.add_argument("--device")
+    parser.add_argument("--host", dest="device", help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
-    return publish_gpu_metrics(DEFAULT_ENV_FILES, args.host)
+    if not args.device:
+        parser.error("the following arguments are required: --device")
+    return publish_gpu_metrics(DEFAULT_ENV_FILES, args.device)
 
 
 if __name__ == "__main__":

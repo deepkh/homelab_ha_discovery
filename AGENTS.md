@@ -12,11 +12,11 @@
     ├── homelab_ha_discovery
     │   ├── collectors
     │   └── scripts
-- Host identity is runtime data, not a folder split. Shared scripts should accept a host value and use it for MQTT topics, Home Assistant unique IDs, and device identifiers.
+- Device identity is runtime data, not a folder split. Shared scripts should accept a device value and use it for MQTT topics, Home Assistant unique IDs, and device identifiers.
 - Python 3 code for Debian homelab hosts runs on the host itself, usually via a systemd timer.
 - Python 3 code for ASUS router collectors runs on a Debian homelab host and collects router data via SSH remote commands. The user will provide the required router CLI commands.
 - Each Python 3 script runs independently. The rough code flow is:
-  - `src/homelab_ha_discovery/scripts/publish_cpu_usage.py --host <host>` -> parse CPU usage from the `top` CLI tool -> publish the data to the MQTT server.
+  - `src/homelab_ha_discovery/scripts/publish_cpu_usage.py --device <device>` -> parse CPU usage from the `top` CLI tool -> publish the data to the MQTT server.
 - MQTT payloads and discovery configuration should follow Home Assistant-compatible formats.
 - Debian homelab hosts run Debian 13 on x86_64.
 - ASUS routers are ASUS WiFi routers.
@@ -36,10 +36,10 @@ For human operators, environment variables can be loaded from `/etc/homelab-ha-d
 Do not store MQTT credentials in this repository. For systemd services or timers, prefer an environment file outside the repo, for example `/etc/homelab-ha-discovery/mqtt.env`, referenced by service files with `EnvironmentFile=/etc/homelab-ha-discovery/mqtt.env`. The file should be readable only by the service user or root.
 
 Required MQTT/Home Assistant conventions:
-- Use stable `unique_id` values based on host, component, and metric name.
+- Use stable `unique_id` values based on device, component, and metric name.
 - Use `HA_MQTT_TOPIC_PREFIX` for the root topic prefix, defaulting to `homelab-ha-discovery`.
-- Use predictable state topics, for example `<prefix>/<host>/<component>/<metric>/state`.
-- Use predictable discovery topics, for example `homeassistant/sensor/homelab_ha_discovery_<host>_<component>_<metric>/config`.
+- Use predictable state topics, for example `<prefix>/<device>/<component>/<metric>/state`.
+- Use predictable discovery topics, for example `homeassistant/sensor/homelab_ha_discovery_<device>_<component>_<metric>/config`.
 - Publish Home Assistant discovery config when the script supports discovery, unless the existing script uses another pattern.
 - Keep device names and identifiers stable so Home Assistant does not create duplicate entities.
 
@@ -65,7 +65,8 @@ Do not publish deletion payloads to the MQTT broker unless the user explicitly a
 - Do not update `requirements.txt` unless explicitly asked.
 - Keep changes scoped to the requested script.
 - Add shared helpers only when the user asks or when existing duplicated logic makes the change clearly safer.
-- Do not introduce host-specific folders for Debian homelab hosts; pass host identity as runtime data.
+- Do not introduce device-specific folders for Debian homelab hosts; pass device identity as runtime data.
+- For router collectors, keep SSH connection hostnames separate from Home Assistant/MQTT device identity; use names such as `--ssh-host` or `--router-host` for connection targets.
 
 ## Validation
 - Run only relevant tests.
