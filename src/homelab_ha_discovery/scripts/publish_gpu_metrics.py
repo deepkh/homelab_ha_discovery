@@ -13,7 +13,11 @@ SRC_DIR = Path(__file__).resolve().parents[2]
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from homelab_ha_discovery.collectors.gpu_nvidia import parse_gpu_metrics, run_nvidia_smi
+from homelab_ha_discovery.collectors.gpu_nvidia import (
+    GpuMetrics,
+    parse_gpu_metrics,
+    run_nvidia_smi,
+)
 from homelab_ha_discovery.discovery import (
     MetricIdentity,
     mqtt_topic_prefix,
@@ -32,47 +36,56 @@ DEFAULT_ENV_FILES = (
 )
 
 
-def gpu_state_topic(device: str) -> str:
-    return f"{mqtt_topic_prefix()}/gpu/usages/{device}"
+def gpu_key(gpu_index: int) -> str:
+    if gpu_index < 0:
+        raise ValueError("GPU index must be zero or greater")
+    return f"gpu{gpu_index}"
+
+
+def gpu_state_topic(device: str, gpu_index: int | None = None) -> str:
+    topic = f"{mqtt_topic_prefix()}/gpu/usages/{device}"
+    if gpu_index is None:
+        return topic
+    return f"{topic}/{gpu_key(gpu_index)}"
 
 
 def gpu_metrics_identity(
     device: str,
+    gpu_index: int | None = None,
     state_topic_override: str | None = None,
 ) -> MetricIdentity:
     return MetricIdentity(
         host=device,
         component="gpu",
         metric="metrics",
-        state_topic_override=state_topic_override or gpu_state_topic(device),
+        state_topic_override=state_topic_override or gpu_state_topic(device, gpu_index),
     )
 
 
-def gpu_usage_identity(device: str, state_topic: str) -> MetricIdentity:
+def gpu_metric_identity(
+    device: str,
+    key: str,
+    metric: str,
+    state_topic: str,
+) -> MetricIdentity:
     return MetricIdentity(
         host=device,
-        component="gpu",
-        metric="usage",
+        component=key,
+        metric=metric,
         state_topic_override=state_topic,
     )
 
 
-def gpu_memory_usage_identity(device: str, state_topic: str) -> MetricIdentity:
-    return MetricIdentity(
-        host=device,
-        component="gpu",
-        metric="memory_usage",
-        state_topic_override=state_topic,
-    )
+def select_gpu_metrics(metrics: GpuMetrics, gpu_index: int | None = None) -> GpuMetrics:
+    if gpu_index is None:
+        return metrics
 
-
-def gpu_temperature_identity(device: str, state_topic: str) -> MetricIdentity:
-    return MetricIdentity(
-        host=device,
-        component="gpu",
-        metric="temperature",
-        state_topic_override=state_topic,
-    )
+    key = gpu_key(gpu_index)
+    if key not in metrics:
+        raise ValueError(
+            f"GPU index {gpu_index} is out of range; detected {len(metrics)} GPU(s)"
+        )
+    return {key: metrics[key]}
 
 
 def gpu_metrics_client_id(device: str) -> str:
@@ -81,67 +94,74 @@ def gpu_metrics_client_id(device: str) -> str:
     return f"homelab-ha-discovery_{device}_gpu_metrics"
 
 
-def publish_gpu_discovery(device: str, state_topic: str) -> None:
-    configs = (
-        (
-            gpu_usage_identity(device, state_topic),
-            f"{device} GPU Usage",
-            "%",
-            None,
-            "{{ value_json['GPU Usages'] }}",
-        ),
-        (
-            gpu_memory_usage_identity(device, state_topic),
-            f"{device} GPU Memory Usage",
-            "%",
-            None,
-            "{{ value_json['Memory Usage'] }}",
-        ),
-        (
-            gpu_temperature_identity(device, state_topic),
-            f"{device} GPU Temperature",
-            "°C",
-            "temperature",
-            "{{ value_json['Temperature'] }}",
-        ),
-    )
-    for identity, name, unit_of_measurement, device_class, value_template in configs:
-        payload = json.dumps(
-            sensor_discovery_config(
-                identity,
-                name=name,
-                unit_of_measurement=unit_of_measurement,
-                device_class=device_class,
-                state_class="measurement",
-                value_template=value_template,
+def publish_gpu_discovery(
+    device: str,
+    state_topic: str,
+    metrics: GpuMetrics,
+) -> None:
+    for key in metrics:
+        configs = (
+            (
+                gpu_metric_identity(device, key, "usage", state_topic),
+                f"{device} {key.upper()} Usage",
+                "%",
+                None,
+                f"{{{{ value_json['{key}']['GPU Usages'] }}}}",
             ),
-            separators=(",", ":"),
+            (
+                gpu_metric_identity(device, key, "memory_usage", state_topic),
+                f"{device} {key.upper()} Memory Usage",
+                "%",
+                None,
+                f"{{{{ value_json['{key}']['Memory Usage'] }}}}",
+            ),
+            (
+                gpu_metric_identity(device, key, "temperature", state_topic),
+                f"{device} {key.upper()} Temperature",
+                "°C",
+                "temperature",
+                f"{{{{ value_json['{key}']['Temperature'] }}}}",
+            ),
         )
-        publish_mqtt(
-            identity.discovery_topic,
-            payload,
-            default_client_id=gpu_metrics_client_id(device),
-            retain=True,
-        )
+        for identity, name, unit_of_measurement, device_class, value_template in configs:
+            payload = json.dumps(
+                sensor_discovery_config(
+                    identity,
+                    name=name,
+                    unit_of_measurement=unit_of_measurement,
+                    device_class=device_class,
+                    state_class="measurement",
+                    value_template=value_template,
+                ),
+                separators=(",", ":"),
+            )
+            publish_mqtt(
+                identity.discovery_topic,
+                payload,
+                default_client_id=gpu_metrics_client_id(device),
+                retain=True,
+            )
 
 
 def publish_gpu_metrics(
     env_files: tuple[str, ...],
     device: str,
     default_mqtt_topic: str | None = None,
+    gpu_index: int | None = None,
     publisher_only: bool = False,
 ) -> int:
     try:
         load_env_files(env_files)
-        identity = gpu_metrics_identity(device)
+        identity = gpu_metrics_identity(device, gpu_index)
         mqtt_topic = os.environ.get(
             "MQTT_TOPIC",
             default_mqtt_topic or identity.state_topic,
         )
+        metrics = select_gpu_metrics(parse_gpu_metrics(run_nvidia_smi()), gpu_index)
         if not publisher_only:
-            publish_gpu_discovery(device, mqtt_topic)
+            publish_gpu_discovery(device, mqtt_topic, metrics)
 
-        payload = json.dumps(parse_gpu_metrics(run_nvidia_smi()), separators=(",", ":"))
+        payload = json.dumps(metrics, separators=(",", ":"))
         publish_mqtt(
             mqtt_topic,
             payload,
@@ -158,6 +178,12 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--device")
     parser.add_argument("--host", dest="device", help=argparse.SUPPRESS)
+    parser.add_argument(
+        "--gpu",
+        type=int,
+        metavar="INDEX",
+        help="Publish only the zero-based NVIDIA GPU index.",
+    )
     parser.add_argument(
         "--publisher-only",
         action="store_true",
@@ -180,6 +206,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if not args.device:
         parser.error("the following arguments are required: --device")
+    if args.gpu is not None and args.gpu < 0:
+        parser.error("--gpu must be zero or greater")
     if args.timer_publish_discovery_config is not None and args.timer is None:
         parser.error("--timer-publish-discovery-config requires --timer")
     if args.timer_publish_discovery_config is not None and args.publisher_only:
@@ -203,6 +231,7 @@ def main(argv: list[str] | None = None) -> int:
         result = publish_gpu_metrics(
             DEFAULT_ENV_FILES,
             args.device,
+            gpu_index=args.gpu,
             publisher_only=not publish_discovery,
         )
         if result == 0 and publish_discovery:

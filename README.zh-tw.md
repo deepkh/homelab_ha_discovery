@@ -102,6 +102,14 @@ NVIDIA GPU 指標：
 python3 src/homelab_ha_discovery/scripts/publish_gpu_metrics.py --device hpc
 ```
 
+未指定 `--gpu` 時，會依照 `nvidia-smi` 的列順序將所有偵測到的 NVIDIA
+GPU 發布為 `gpu0`、`gpu1`，以此類推。若只要發布單一 GPU，請傳入其從
+0 開始的 index：
+
+```bash
+python3 src/homelab_ha_discovery/scripts/publish_gpu_metrics.py --device hpc --gpu 0
+```
+
 若要頻繁透過 systemd timer 執行，請在一般執行已註冊 discovery config 後使用 `--publisher-only`：
 
 ```bash
@@ -149,7 +157,7 @@ Discovery topic：
 homeassistant/sensor/homelab_ha_discovery_hpc_cpu_usage/config
 ```
 
-NVIDIA GPU 指標會將 state 發布到：
+未指定 `--gpu` 時，NVIDIA GPU 指標會將 state 發布到：
 
 ```text
 homelab-ha-discovery/gpu/usages/hpc
@@ -158,18 +166,31 @@ homelab-ha-discovery/gpu/usages/hpc
 Payload：
 
 ```json
-{"GPU Usages":65.0,"Memory Usage":48.3,"Temperature":40}
+{"gpu0":{"GPU Card Name":"NVIDIA GeForce RTX 5060 Ti","GPU Usages":55.2,"Memory Usage":41.7,"Temperature":72},"gpu1":{"GPU Card Name":"NVIDIA GeForce RTX 3060","GPU Usages":30.0,"Memory Usage":22.5,"Temperature":61},"gpu2":{"GPU Card Name":"NVIDIA RTX A4000","GPU Usages":80.4,"Memory Usage":70.1,"Temperature":68}}
 ```
 
-若有多張 GPU，`Temperature` 會回報攝氏溫度最高的 GPU。
-
-Discovery topics：
+使用 `--gpu 0` 時，NVIDIA GPU 指標只會將 `gpu0` 發布到：
 
 ```text
-homeassistant/sensor/homelab_ha_discovery_hpc_gpu_usage/config
-homeassistant/sensor/homelab_ha_discovery_hpc_gpu_memory_usage/config
-homeassistant/sensor/homelab_ha_discovery_hpc_gpu_temperature/config
+homelab-ha-discovery/gpu/usages/hpc/gpu0
 ```
+
+Payload：
+
+```json
+{"gpu0":{"GPU Card Name":"NVIDIA GeForce RTX 5060 Ti","GPU Usages":55.2,"Memory Usage":41.7,"Temperature":72}}
+```
+
+每次執行會為該次包含的每張 GPU 發布 discovery topics：
+
+```text
+homeassistant/sensor/homelab_ha_discovery_hpc_gpu0_usage/config
+homeassistant/sensor/homelab_ha_discovery_hpc_gpu0_memory_usage/config
+homeassistant/sensor/homelab_ha_discovery_hpc_gpu0_temperature/config
+```
+
+`GPU Card Name` 只會作為 payload metadata；不會為它建立 Home Assistant
+sensor。
 
 Discovery config 會被 retain。Metric state 預設不 retain。
 
@@ -183,6 +204,7 @@ Collectors 位於 `src/homelab_ha_discovery/collectors/`；可執行腳本位於
 python3 -m py_compile src/homelab_ha_discovery/mqtt.py
 python3 -m py_compile src/homelab_ha_discovery/scripts/timer.py
 python3 -m py_compile src/homelab_ha_discovery/scripts/publish_cpu_usage.py
+python3 -m py_compile src/homelab_ha_discovery/collectors/gpu_nvidia.py
 python3 -m py_compile src/homelab_ha_discovery/scripts/publish_gpu_metrics.py
 ```
 

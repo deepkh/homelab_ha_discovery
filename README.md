@@ -102,6 +102,14 @@ NVIDIA GPU metrics:
 python3 src/homelab_ha_discovery/scripts/publish_gpu_metrics.py --device hpc
 ```
 
+When `--gpu` is omitted, all detected NVIDIA GPUs are published as `gpu0`,
+`gpu1`, and so on in `nvidia-smi` row order. To publish only one GPU, pass its
+zero-based index:
+
+```bash
+python3 src/homelab_ha_discovery/scripts/publish_gpu_metrics.py --device hpc --gpu 0
+```
+
 For frequent systemd timer runs, use `--publisher-only` after a normal run has registered discovery config:
 
 ```bash
@@ -149,7 +157,7 @@ Discovery topic:
 homeassistant/sensor/homelab_ha_discovery_hpc_cpu_usage/config
 ```
 
-NVIDIA GPU metrics publish state to:
+NVIDIA GPU metrics publish state to this topic when `--gpu` is omitted:
 
 ```text
 homelab-ha-discovery/gpu/usages/hpc
@@ -158,18 +166,31 @@ homelab-ha-discovery/gpu/usages/hpc
 Payload:
 
 ```json
-{"GPU Usages":65.0,"Memory Usage":48.3,"Temperature":40}
+{"gpu0":{"GPU Card Name":"NVIDIA GeForce RTX 5060 Ti","GPU Usages":55.2,"Memory Usage":41.7,"Temperature":72},"gpu1":{"GPU Card Name":"NVIDIA GeForce RTX 3060","GPU Usages":30.0,"Memory Usage":22.5,"Temperature":61},"gpu2":{"GPU Card Name":"NVIDIA RTX A4000","GPU Usages":80.4,"Memory Usage":70.1,"Temperature":68}}
 ```
 
-For multiple GPUs, `Temperature` reports the hottest GPU temperature in Celsius.
-
-Discovery topics:
+With `--gpu 0`, NVIDIA GPU metrics publish only `gpu0` to:
 
 ```text
-homeassistant/sensor/homelab_ha_discovery_hpc_gpu_usage/config
-homeassistant/sensor/homelab_ha_discovery_hpc_gpu_memory_usage/config
-homeassistant/sensor/homelab_ha_discovery_hpc_gpu_temperature/config
+homelab-ha-discovery/gpu/usages/hpc/gpu0
 ```
+
+Payload:
+
+```json
+{"gpu0":{"GPU Card Name":"NVIDIA GeForce RTX 5060 Ti","GPU Usages":55.2,"Memory Usage":41.7,"Temperature":72}}
+```
+
+Discovery topics are published for every GPU included in that run:
+
+```text
+homeassistant/sensor/homelab_ha_discovery_hpc_gpu0_usage/config
+homeassistant/sensor/homelab_ha_discovery_hpc_gpu0_memory_usage/config
+homeassistant/sensor/homelab_ha_discovery_hpc_gpu0_temperature/config
+```
+
+`GPU Card Name` is included as payload metadata only; no Home Assistant sensor is
+created for it.
 
 Discovery config is retained. Metric state is non-retained by default.
 
@@ -183,6 +204,7 @@ Relevant validation commands:
 python3 -m py_compile src/homelab_ha_discovery/mqtt.py
 python3 -m py_compile src/homelab_ha_discovery/scripts/timer.py
 python3 -m py_compile src/homelab_ha_discovery/scripts/publish_cpu_usage.py
+python3 -m py_compile src/homelab_ha_discovery/collectors/gpu_nvidia.py
 python3 -m py_compile src/homelab_ha_discovery/scripts/publish_gpu_metrics.py
 ```
 

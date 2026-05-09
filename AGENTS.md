@@ -55,7 +55,9 @@ Required MQTT/Home Assistant conventions:
 - Metric state publishes should remain non-retained by default.
 - Discovery config must point to the exact state topic used by the metric publish, including any supported topic override.
 - CPU usage currently publishes state to `<prefix>/cpu/usages/<device>` with payload `{"CPU Usages":<percent>}` and discovery topic `homeassistant/sensor/homelab_ha_discovery_<device>_cpu_usage/config`.
-- GPU metrics currently publish one state payload to `<prefix>/gpu/usages/<device>` with `GPU Usages`, `Memory Usage`, and `Temperature`; discovery should expose separate sensors for `gpu_usage`, `gpu_memory_usage`, and `gpu_temperature` from that shared state topic.
+- GPU metrics publish one nested state payload. When `--gpu` is omitted, publish all detected GPUs in `nvidia-smi` row order to `<prefix>/gpu/usages/<device>` as `gpu0`, `gpu1`, and so on. Each GPU object includes `GPU Card Name`, `GPU Usages`, `Memory Usage`, and `Temperature`.
+- When GPU metrics use `--gpu INDEX`, publish only `gpu<INDEX>` to `<prefix>/gpu/usages/<device>/gpu<INDEX>`. If `INDEX` is out of range, exit with an error before publishing discovery config or state.
+- GPU discovery should expose separate sensors for every included GPU metric, for example `homeassistant/sensor/homelab_ha_discovery_<device>_gpu0_usage/config`, `homeassistant/sensor/homelab_ha_discovery_<device>_gpu0_memory_usage/config`, and `homeassistant/sensor/homelab_ha_discovery_<device>_gpu0_temperature/config`. Discovery value templates should read from the nested GPU object, for example `{{ value_json['gpu0']['GPU Usages'] }}`. Do not create a sensor for `GPU Card Name`; it is payload metadata only.
 
 ## Home Assistant cleanup
 This project was renamed from `homelab-mqtt-monitor` to `homelab-ha-discovery`.

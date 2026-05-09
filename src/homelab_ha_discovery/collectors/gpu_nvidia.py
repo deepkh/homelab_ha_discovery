@@ -2,8 +2,13 @@
 
 from __future__ import annotations
 
+import csv
 import os
 import subprocess
+
+
+GpuMetricValue = str | float | int
+GpuMetrics = dict[str, dict[str, GpuMetricValue]]
 
 
 def run_nvidia_smi() -> str:
@@ -12,7 +17,7 @@ def run_nvidia_smi() -> str:
     result = subprocess.run(
         [
             "nvidia-smi",
-            "--query-gpu=utilization.gpu,memory.used,memory.total,temperature.gpu",
+            "--query-gpu=name,utilization.gpu,memory.used,memory.total,temperature.gpu",
             "--format=csv,noheader,nounits",
         ],
         check=True,
@@ -27,36 +32,38 @@ def clamp_percent(value: float) -> float:
     return round(max(0.0, min(100.0, value)), 1)
 
 
-def parse_gpu_metrics(nvidia_smi_output: str) -> dict[str, float]:
-    gpu_usages: list[float] = []
-    memory_usages: list[float] = []
-    temperatures: list[int] = []
+def parse_gpu_metrics(nvidia_smi_output: str) -> GpuMetrics:
+    metrics: GpuMetrics = {}
 
-    for line in nvidia_smi_output.splitlines():
-        line = line.strip()
-        if not line:
+    for row in csv.reader(nvidia_smi_output.splitlines(), skipinitialspace=True):
+        fields = [field.strip() for field in row]
+        if not fields or all(not field for field in fields):
             continue
 
-        fields = [field.strip() for field in line.split(",")]
-        if len(fields) != 4:
-            raise ValueError(f"Unexpected nvidia-smi output line: {line}")
+        if len(fields) != 5:
+            raise ValueError(
+                f"Unexpected nvidia-smi output line: {', '.join(fields)}"
+            )
 
-        gpu_usage = float(fields[0])
-        memory_used = float(fields[1])
-        memory_total = float(fields[2])
-        temperature = float(fields[3])
+        card_name = fields[0]
+        if not card_name:
+            raise ValueError("Missing NVIDIA GPU card name")
+
+        gpu_usage = float(fields[1])
+        memory_used = float(fields[2])
+        memory_total = float(fields[3])
+        temperature = float(fields[4])
         if memory_total <= 0:
             raise ValueError(f"Invalid NVIDIA GPU memory total: {memory_total}")
 
-        gpu_usages.append(clamp_percent(gpu_usage))
-        memory_usages.append(clamp_percent((memory_used / memory_total) * 100.0))
-        temperatures.append(round(temperature))
+        metrics[f"gpu{len(metrics)}"] = {
+            "GPU Card Name": card_name,
+            "GPU Usages": clamp_percent(gpu_usage),
+            "Memory Usage": clamp_percent((memory_used / memory_total) * 100.0),
+            "Temperature": round(temperature),
+        }
 
-    if not gpu_usages:
+    if not metrics:
         raise ValueError("Could not find GPU metrics in nvidia-smi output")
 
-    return {
-        "GPU Usages": clamp_percent(sum(gpu_usages) / len(gpu_usages)),
-        "Memory Usage": clamp_percent(sum(memory_usages) / len(memory_usages)),
-        "Temperature": max(temperatures),
-    }
+    return metrics
