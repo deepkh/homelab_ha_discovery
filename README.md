@@ -17,7 +17,7 @@ For AI agent and repository maintenance rules, see [AGENTS.md](AGENTS.md).
 ## Requirements
 
 - Python 3 runtime
-- `paho-mqtt`, installed from `requirements.txt`
+- `paho-mqtt` for MQTT and `psutil` for Linux network interface throughput, installed from `requirements.txt`
 - `top` and `sensors` for CPU metrics publishing. On Debian, `sensors` is provided by `lm-sensors`.
 - `nvidia-smi` for NVIDIA GPU publishing
 - `smartctl` for disk and NVMe SMART publishing. On Debian, `smartctl` is provided by `smartmontools`.
@@ -46,7 +46,7 @@ source .venv/bin/activate
 ### Install necessary libs to `.venv` for Python 3 (optional)
 
 ```bash
-pip install paho-mqtt
+pip install paho-mqtt psutil
 ```
 
 ### Install necessary libs from `requirements.txt`
@@ -134,6 +134,18 @@ process or service per NVMe controller, for example `/dev/nvme0`, `/dev/nvme1`,
 and so on. The NVMe component in MQTT and Home Assistant discovery is derived
 from the `--dev` basename, for example `nvme0` for `/dev/nvme0`.
 
+Network metrics:
+
+```bash
+python3 src/homelab_ha_discovery/scripts/publish_network_metrics.py --device hpc --dev ppp0
+```
+
+The network publisher uses `psutil.net_io_counters(pernic=True)` locally.
+`--dev` must match a network interface key, for example `ppp0`. Without
+`--timer`, it takes two samples one second apart and publishes one calculated
+throughput state. Speeds are published in `KB/s`, where `KB` means 1024 bytes,
+and values are rounded to two decimal places.
+
 For frequent systemd timer runs, use `--publisher-only` after a normal run has registered discovery config:
 
 ```bash
@@ -141,18 +153,27 @@ python3 src/homelab_ha_discovery/scripts/publish_cpu_metrics.py --device hpc --p
 python3 src/homelab_ha_discovery/scripts/publish_gpu_metrics.py --device hpc --publisher-only
 python3 src/homelab_ha_discovery/scripts/publish_sdx_metrics.py --device hpc --dev /dev/sda --publisher-only
 python3 src/homelab_ha_discovery/scripts/publish_nvme_metrics.py --device hpc --dev /dev/nvme0 --publisher-only
+python3 src/homelab_ha_discovery/scripts/publish_network_metrics.py --device hpc --dev ppp0 --publisher-only
 ```
 
-For long-running service mode, use `--timer SECONDS`. The first metric publish happens immediately, then the script sleeps between publish attempts:
+For long-running service mode, use `--timer SECONDS`. Most publishers publish
+the first metric immediately, then sleep between publish attempts. Network
+metrics establish a baseline first, wait one interval, then publish the first
+calculated speed:
 
 ```bash
 python3 src/homelab_ha_discovery/scripts/publish_cpu_metrics.py --device hpc --timer 5.0
 python3 src/homelab_ha_discovery/scripts/publish_gpu_metrics.py --device hpc --timer 5.0
 python3 src/homelab_ha_discovery/scripts/publish_sdx_metrics.py --device hpc --dev /dev/sda --timer 5.0
 python3 src/homelab_ha_discovery/scripts/publish_nvme_metrics.py --device hpc --dev /dev/nvme0 --timer 5.0
+python3 src/homelab_ha_discovery/scripts/publish_network_metrics.py --device hpc --dev ppp0 --timer 1.0
 ```
 
-Without `--publisher-only`, `--timer` publishes discovery config once at startup, then publishes only metric state each interval. With `--timer --publisher-only`, it publishes only metric state each interval.
+Without `--publisher-only`, `--timer` publishes discovery config once at
+startup, then publishes only metric state each interval. For network metrics,
+the startup discovery config is published before the first calculated metric
+state after the baseline interval. With `--timer --publisher-only`, it publishes
+only metric state each interval.
 
 To republish retained discovery config periodically during long-running service mode, add `--timer-publish-discovery-config SECONDS`:
 
@@ -161,6 +182,7 @@ python3 src/homelab_ha_discovery/scripts/publish_cpu_metrics.py --device hpc --t
 python3 src/homelab_ha_discovery/scripts/publish_gpu_metrics.py --device hpc --timer 5.0 --timer-publish-discovery-config 60.0
 python3 src/homelab_ha_discovery/scripts/publish_sdx_metrics.py --device hpc --dev /dev/sda --timer 5.0 --timer-publish-discovery-config 60.0
 python3 src/homelab_ha_discovery/scripts/publish_nvme_metrics.py --device hpc --dev /dev/nvme0 --timer 5.0 --timer-publish-discovery-config 60.0
+python3 src/homelab_ha_discovery/scripts/publish_network_metrics.py --device hpc --dev ppp0 --timer 1.0 --timer-publish-discovery-config 60.0
 ```
 
 If `--timer-publish-discovery-config` is not set, timer behavior stays discovery-once. This option requires `--timer` and cannot be combined with `--publisher-only`.
@@ -280,6 +302,30 @@ Assistant unique IDs, run one publisher per controller to keep entities stable.
 uses `min`; `temperature_c` uses `°C`; `power_on_hours` uses `h`;
 `data_written_tb` uses `TB`; warning and error metrics are unitless.
 
+With `--dev ppp0`, network metrics publish state to:
+
+```text
+homelab-ha-discovery/ppp0/metrics/hpc
+```
+
+Payload:
+
+```json
+{"Download Speed":123.45,"Upload Speed":67.89}
+```
+
+Discovery topics:
+
+```text
+homeassistant/sensor/homelab_ha_discovery_hpc_ppp0_download_speed/config
+homeassistant/sensor/homelab_ha_discovery_hpc_ppp0_upload_speed/config
+```
+
+Network speed sensors use `KB/s`, where `KB` means 1024 bytes. The Home
+Assistant sensor names also use the network interface component, for example
+`hpc ppp0 Download Speed`. Because the interface component is included in Home
+Assistant unique IDs, changing `--dev` changes the entities.
+
 If `MQTT_TOPIC` is set, publishers use it as the state topic and discovery config
 points to that exact topic.
 
@@ -302,6 +348,8 @@ python3 -m py_compile src/homelab_ha_discovery/collectors/disk_smart.py
 python3 -m py_compile src/homelab_ha_discovery/scripts/publish_sdx_metrics.py
 python3 -m py_compile src/homelab_ha_discovery/collectors/nvme_smart.py
 python3 -m py_compile src/homelab_ha_discovery/scripts/publish_nvme_metrics.py
+python3 -m py_compile src/homelab_ha_discovery/collectors/network_linux.py
+python3 -m py_compile src/homelab_ha_discovery/scripts/publish_network_metrics.py
 ```
 
 Run `pytest` if tests are present.

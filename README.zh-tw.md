@@ -17,7 +17,7 @@ AI agent 和 repository 維護規則請見 [AGENTS.md](AGENTS.md)。
 ## 需求
 
 - Python 3 執行環境
-- 從 `requirements.txt` 安裝的 `paho-mqtt`
+- 從 `requirements.txt` 安裝的 `paho-mqtt`（MQTT 用）和 `psutil`（Linux network interface throughput 用）
 - 用於 CPU 指標發布的 `top` 和 `sensors`。在 Debian 上，`sensors` 由 `lm-sensors` 提供。
 - 用於 NVIDIA GPU 發布的 `nvidia-smi`
 - 用於磁碟與 NVMe SMART 發布的 `smartctl`。在 Debian 上，`smartctl` 由 `smartmontools` 提供。
@@ -46,7 +46,7 @@ source .venv/bin/activate
 ### 將 Python 3 所需套件安裝到 `.venv`（選用）
 
 ```bash
-pip install paho-mqtt
+pip install paho-mqtt psutil
 ```
 
 ### 從 `requirements.txt` 安裝所需套件
@@ -133,6 +133,17 @@ controller 執行一個 process 或 service，例如 `/dev/nvme0`、`/dev/nvme1`
 等等。MQTT 和 Home Assistant discovery 中的 NVMe component 會由 `--dev`
 的 basename 產生，例如 `/dev/nvme0` 會使用 `nvme0`。
 
+Network 指標：
+
+```bash
+python3 src/homelab_ha_discovery/scripts/publish_network_metrics.py --device hpc --dev ppp0
+```
+
+Network 發布器會在本機使用 `psutil.net_io_counters(pernic=True)`。`--dev`
+必須符合 network interface key，例如 `ppp0`。未使用 `--timer` 時，它會間隔
+一秒取得兩次樣本，並發布一次計算出的 throughput state。速度會以 `KB/s`
+發布，其中 `KB` 代表 1024 bytes，數值會四捨五入到小數點後兩位。
+
 若要頻繁透過 systemd timer 執行，請在一般執行已註冊 discovery config 後使用 `--publisher-only`：
 
 ```bash
@@ -140,18 +151,20 @@ python3 src/homelab_ha_discovery/scripts/publish_cpu_metrics.py --device hpc --p
 python3 src/homelab_ha_discovery/scripts/publish_gpu_metrics.py --device hpc --publisher-only
 python3 src/homelab_ha_discovery/scripts/publish_sdx_metrics.py --device hpc --dev /dev/sda --publisher-only
 python3 src/homelab_ha_discovery/scripts/publish_nvme_metrics.py --device hpc --dev /dev/nvme0 --publisher-only
+python3 src/homelab_ha_discovery/scripts/publish_network_metrics.py --device hpc --dev ppp0 --publisher-only
 ```
 
-若要使用長時間執行的服務模式，請使用 `--timer SECONDS`。第一次指標發布會立即發生，之後腳本會在每次發布嘗試之間休眠：
+若要使用長時間執行的服務模式，請使用 `--timer SECONDS`。大多數發布器會立即發布第一次指標，之後腳本會在每次發布嘗試之間休眠。Network 指標會先建立 baseline，等待一個 interval 後，才發布第一次計算出的速度：
 
 ```bash
 python3 src/homelab_ha_discovery/scripts/publish_cpu_metrics.py --device hpc --timer 5.0
 python3 src/homelab_ha_discovery/scripts/publish_gpu_metrics.py --device hpc --timer 5.0
 python3 src/homelab_ha_discovery/scripts/publish_sdx_metrics.py --device hpc --dev /dev/sda --timer 5.0
 python3 src/homelab_ha_discovery/scripts/publish_nvme_metrics.py --device hpc --dev /dev/nvme0 --timer 5.0
+python3 src/homelab_ha_discovery/scripts/publish_network_metrics.py --device hpc --dev ppp0 --timer 1.0
 ```
 
-未使用 `--publisher-only` 時，`--timer` 會在啟動時發布一次 discovery config，之後每個 interval 只發布 metric state。使用 `--timer --publisher-only` 時，每個 interval 只發布 metric state。
+未使用 `--publisher-only` 時，`--timer` 會在啟動時發布一次 discovery config，之後每個 interval 只發布 metric state。對 network 指標來說，啟動時的 discovery config 會在 baseline interval 後、第一次計算出的 metric state 之前發布。使用 `--timer --publisher-only` 時，每個 interval 只發布 metric state。
 
 若要在長時間執行的服務模式中定期重新發布保留的 discovery config，請加入 `--timer-publish-discovery-config SECONDS`：
 
@@ -160,6 +173,7 @@ python3 src/homelab_ha_discovery/scripts/publish_cpu_metrics.py --device hpc --t
 python3 src/homelab_ha_discovery/scripts/publish_gpu_metrics.py --device hpc --timer 5.0 --timer-publish-discovery-config 60.0
 python3 src/homelab_ha_discovery/scripts/publish_sdx_metrics.py --device hpc --dev /dev/sda --timer 5.0 --timer-publish-discovery-config 60.0
 python3 src/homelab_ha_discovery/scripts/publish_nvme_metrics.py --device hpc --dev /dev/nvme0 --timer 5.0 --timer-publish-discovery-config 60.0
+python3 src/homelab_ha_discovery/scripts/publish_network_metrics.py --device hpc --dev ppp0 --timer 1.0 --timer-publish-discovery-config 60.0
 ```
 
 如果未設定 `--timer-publish-discovery-config`，timer 行為會維持只在啟動時發布一次 discovery。此選項需要 `--timer`，且不能與 `--publisher-only` 一起使用。
@@ -279,6 +293,30 @@ Available Spare`。因為 NVMe component 會包含在 Home Assistant unique ID
 使用 `min`；`temperature_c` 使用 `°C`；`power_on_hours` 使用 `h`；
 `data_written_tb` 使用 `TB`；warning 和 error 指標沒有單位。
 
+使用 `--dev ppp0` 時，network 指標會將 state 發布到：
+
+```text
+homelab-ha-discovery/ppp0/metrics/hpc
+```
+
+Payload：
+
+```json
+{"Download Speed":123.45,"Upload Speed":67.89}
+```
+
+Discovery topics：
+
+```text
+homeassistant/sensor/homelab_ha_discovery_hpc_ppp0_download_speed/config
+homeassistant/sensor/homelab_ha_discovery_hpc_ppp0_upload_speed/config
+```
+
+Network speed sensor 使用 `KB/s`，其中 `KB` 代表 1024 bytes。Home Assistant
+sensor 名稱也會使用 network interface component，例如 `hpc ppp0 Download
+Speed`。因為 interface component 會包含在 Home Assistant unique ID 中，變更
+`--dev` 會改變 entities。
+
 如果設定了 `MQTT_TOPIC`，發布器會將它作為 state topic，且 discovery config
 會指向同一個 topic。
 
@@ -301,6 +339,8 @@ python3 -m py_compile src/homelab_ha_discovery/collectors/disk_smart.py
 python3 -m py_compile src/homelab_ha_discovery/scripts/publish_sdx_metrics.py
 python3 -m py_compile src/homelab_ha_discovery/collectors/nvme_smart.py
 python3 -m py_compile src/homelab_ha_discovery/scripts/publish_nvme_metrics.py
+python3 -m py_compile src/homelab_ha_discovery/collectors/network_linux.py
+python3 -m py_compile src/homelab_ha_discovery/scripts/publish_network_metrics.py
 ```
 
 如果有測試，請執行 `pytest`。
