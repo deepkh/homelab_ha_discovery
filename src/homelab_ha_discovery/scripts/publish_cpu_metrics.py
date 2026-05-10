@@ -128,8 +128,11 @@ def publish_cpu_metrics(
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--device")
-    parser.add_argument("--host", dest="device", help=argparse.SUPPRESS)
+    parser.add_argument(
+        "--ha-device-id",
+        dest="device",
+        help="Stable Home Assistant/MQTT device identity.",
+    )
     parser.add_argument(
         "--publisher-only",
         action="store_true",
@@ -151,7 +154,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
     if not args.device:
-        parser.error("the following arguments are required: --device")
+        parser.error("the following arguments are required: --ha-device-id")
     if args.timer_publish_discovery_config is not None and args.timer is None:
         parser.error("--timer-publish-discovery-config requires --timer")
     if args.timer_publish_discovery_config is not None and args.publisher_only:

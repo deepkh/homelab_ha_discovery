@@ -91,16 +91,22 @@ HA_MQTT_PASSWORD=your-password
 
 Run from the repository root.
 
+Pass `--ha-device-id` as the stable Home Assistant/MQTT device identity. It is
+used in MQTT topics, Home Assistant unique IDs, device identifiers, and sensor
+names. Keep it stable to avoid duplicate Home Assistant entities. `--dev` is
+separate and still names the disk path, NVMe controller path, or network
+interface component where a publisher needs one.
+
 CPU metrics:
 
 ```bash
-python3 src/homelab_ha_discovery/scripts/publish_cpu_metrics.py --device hpc
+python3 src/homelab_ha_discovery/scripts/publish_cpu_metrics.py --ha-device-id hpc
 ```
 
 NVIDIA GPU metrics:
 
 ```bash
-python3 src/homelab_ha_discovery/scripts/publish_gpu_metrics.py --device hpc
+python3 src/homelab_ha_discovery/scripts/publish_gpu_metrics.py --ha-device-id hpc
 ```
 
 When `--gpu` is omitted, all detected NVIDIA GPUs are published as `gpu0`,
@@ -108,13 +114,13 @@ When `--gpu` is omitted, all detected NVIDIA GPUs are published as `gpu0`,
 zero-based index:
 
 ```bash
-python3 src/homelab_ha_discovery/scripts/publish_gpu_metrics.py --device hpc --gpu 0
+python3 src/homelab_ha_discovery/scripts/publish_gpu_metrics.py --ha-device-id hpc --gpu 0
 ```
 
 Disk SMART metrics:
 
 ```bash
-python3 src/homelab_ha_discovery/scripts/publish_sdx_metrics.py --device hpc --dev /dev/sda
+python3 src/homelab_ha_discovery/scripts/publish_sdx_metrics.py --ha-device-id hpc --dev /dev/sda
 ```
 
 The disk SMART publisher runs `sudo smartctl -a <dev>` locally. Configure sudo
@@ -126,7 +132,7 @@ discovery is derived from the `--dev` basename, for example `sda` for
 NVMe SMART metrics:
 
 ```bash
-python3 src/homelab_ha_discovery/scripts/publish_nvme_metrics.py --device hpc --dev /dev/nvme0
+python3 src/homelab_ha_discovery/scripts/publish_nvme_metrics.py --ha-device-id hpc --dev /dev/nvme0
 ```
 
 The NVMe SMART publisher also runs `sudo smartctl -a <dev>` locally. Run one
@@ -137,7 +143,7 @@ from the `--dev` basename, for example `nvme0` for `/dev/nvme0`.
 Network metrics:
 
 ```bash
-python3 src/homelab_ha_discovery/scripts/publish_network_metrics.py --device hpc --dev ppp0
+python3 src/homelab_ha_discovery/scripts/publish_network_metrics.py --ha-device-id hpc --dev ppp0
 ```
 
 The network publisher uses `psutil.net_io_counters(pernic=True)` locally.
@@ -149,11 +155,11 @@ and values are rounded to two decimal places.
 For frequent systemd timer runs, use `--publisher-only` after a normal run has registered discovery config:
 
 ```bash
-python3 src/homelab_ha_discovery/scripts/publish_cpu_metrics.py --device hpc --publisher-only
-python3 src/homelab_ha_discovery/scripts/publish_gpu_metrics.py --device hpc --publisher-only
-python3 src/homelab_ha_discovery/scripts/publish_sdx_metrics.py --device hpc --dev /dev/sda --publisher-only
-python3 src/homelab_ha_discovery/scripts/publish_nvme_metrics.py --device hpc --dev /dev/nvme0 --publisher-only
-python3 src/homelab_ha_discovery/scripts/publish_network_metrics.py --device hpc --dev ppp0 --publisher-only
+python3 src/homelab_ha_discovery/scripts/publish_cpu_metrics.py --ha-device-id hpc --publisher-only
+python3 src/homelab_ha_discovery/scripts/publish_gpu_metrics.py --ha-device-id hpc --publisher-only
+python3 src/homelab_ha_discovery/scripts/publish_sdx_metrics.py --ha-device-id hpc --dev /dev/sda --publisher-only
+python3 src/homelab_ha_discovery/scripts/publish_nvme_metrics.py --ha-device-id hpc --dev /dev/nvme0 --publisher-only
+python3 src/homelab_ha_discovery/scripts/publish_network_metrics.py --ha-device-id hpc --dev ppp0 --publisher-only
 ```
 
 For long-running service mode, use `--timer SECONDS`. Most publishers publish
@@ -162,11 +168,11 @@ metrics establish a baseline first, wait one interval, then publish the first
 calculated speed:
 
 ```bash
-python3 src/homelab_ha_discovery/scripts/publish_cpu_metrics.py --device hpc --timer 5.0
-python3 src/homelab_ha_discovery/scripts/publish_gpu_metrics.py --device hpc --timer 5.0
-python3 src/homelab_ha_discovery/scripts/publish_sdx_metrics.py --device hpc --dev /dev/sda --timer 5.0
-python3 src/homelab_ha_discovery/scripts/publish_nvme_metrics.py --device hpc --dev /dev/nvme0 --timer 5.0
-python3 src/homelab_ha_discovery/scripts/publish_network_metrics.py --device hpc --dev ppp0 --timer 1.0
+python3 src/homelab_ha_discovery/scripts/publish_cpu_metrics.py --ha-device-id hpc --timer 5.0
+python3 src/homelab_ha_discovery/scripts/publish_gpu_metrics.py --ha-device-id hpc --timer 5.0
+python3 src/homelab_ha_discovery/scripts/publish_sdx_metrics.py --ha-device-id hpc --dev /dev/sda --timer 5.0
+python3 src/homelab_ha_discovery/scripts/publish_nvme_metrics.py --ha-device-id hpc --dev /dev/nvme0 --timer 5.0
+python3 src/homelab_ha_discovery/scripts/publish_network_metrics.py --ha-device-id hpc --dev ppp0 --timer 1.0
 ```
 
 Without `--publisher-only`, `--timer` publishes discovery config once at
@@ -178,20 +184,18 @@ only metric state each interval.
 To republish retained discovery config periodically during long-running service mode, add `--timer-publish-discovery-config SECONDS`:
 
 ```bash
-python3 src/homelab_ha_discovery/scripts/publish_cpu_metrics.py --device hpc --timer 5.0 --timer-publish-discovery-config 60.0
-python3 src/homelab_ha_discovery/scripts/publish_gpu_metrics.py --device hpc --timer 5.0 --timer-publish-discovery-config 60.0
-python3 src/homelab_ha_discovery/scripts/publish_sdx_metrics.py --device hpc --dev /dev/sda --timer 5.0 --timer-publish-discovery-config 60.0
-python3 src/homelab_ha_discovery/scripts/publish_nvme_metrics.py --device hpc --dev /dev/nvme0 --timer 5.0 --timer-publish-discovery-config 60.0
-python3 src/homelab_ha_discovery/scripts/publish_network_metrics.py --device hpc --dev ppp0 --timer 1.0 --timer-publish-discovery-config 60.0
+python3 src/homelab_ha_discovery/scripts/publish_cpu_metrics.py --ha-device-id hpc --timer 5.0 --timer-publish-discovery-config 60.0
+python3 src/homelab_ha_discovery/scripts/publish_gpu_metrics.py --ha-device-id hpc --timer 5.0 --timer-publish-discovery-config 60.0
+python3 src/homelab_ha_discovery/scripts/publish_sdx_metrics.py --ha-device-id hpc --dev /dev/sda --timer 5.0 --timer-publish-discovery-config 60.0
+python3 src/homelab_ha_discovery/scripts/publish_nvme_metrics.py --ha-device-id hpc --dev /dev/nvme0 --timer 5.0 --timer-publish-discovery-config 60.0
+python3 src/homelab_ha_discovery/scripts/publish_network_metrics.py --ha-device-id hpc --dev ppp0 --timer 1.0 --timer-publish-discovery-config 60.0
 ```
 
 If `--timer-publish-discovery-config` is not set, timer behavior stays discovery-once. This option requires `--timer` and cannot be combined with `--publisher-only`.
 
-The hidden `--host` argument is accepted as a compatibility alias for `--device`.
-
 ## MQTT Topics
 
-With the default topic prefix and `--device hpc`, CPU metrics publish state to:
+With the default topic prefix and `--ha-device-id hpc`, CPU metrics publish state to:
 
 ```text
 homelab-ha-discovery/cpu/metrics/hpc
@@ -210,7 +214,8 @@ homeassistant/sensor/homelab_ha_discovery_hpc_cpu_usage/config
 homeassistant/sensor/homelab_ha_discovery_hpc_cpu_temperature/config
 ```
 
-NVIDIA GPU metrics publish state to this topic when `--gpu` is omitted:
+With `--ha-device-id hpc`, NVIDIA GPU metrics publish state to this topic when
+`--gpu` is omitted:
 
 ```text
 homelab-ha-discovery/gpu/usages/hpc
@@ -222,7 +227,7 @@ Payload:
 {"gpu0":{"GPU Card Name":"NVIDIA GeForce RTX 5060 Ti","GPU Usages":55.2,"Memory Usage":41.7,"Temperature":72},"gpu1":{"GPU Card Name":"NVIDIA GeForce RTX 3060","GPU Usages":30.0,"Memory Usage":22.5,"Temperature":61},"gpu2":{"GPU Card Name":"NVIDIA RTX A4000","GPU Usages":80.4,"Memory Usage":70.1,"Temperature":68}}
 ```
 
-With `--gpu 0`, NVIDIA GPU metrics publish only `gpu0` to:
+With `--ha-device-id hpc --gpu 0`, NVIDIA GPU metrics publish only `gpu0` to:
 
 ```text
 homelab-ha-discovery/gpu/usages/hpc/gpu0
@@ -245,7 +250,7 @@ homeassistant/sensor/homelab_ha_discovery_hpc_gpu0_temperature/config
 `GPU Card Name` is included as payload metadata only; no Home Assistant sensor is
 created for it.
 
-With `--dev /dev/sda`, disk SMART metrics publish state to:
+With `--ha-device-id hpc --dev /dev/sda`, disk SMART metrics publish state to:
 
 ```text
 homelab-ha-discovery/sda/metrics/hpc
@@ -270,7 +275,7 @@ The Home Assistant sensor names also use the disk component, for example
 `hpc sda Power On Hours`. Because the disk component is included in Home
 Assistant unique IDs, changing `--dev` changes the entities.
 
-With `--dev /dev/nvme0`, NVMe SMART metrics publish state to:
+With `--ha-device-id hpc --dev /dev/nvme0`, NVMe SMART metrics publish state to:
 
 ```text
 homelab-ha-discovery/nvme0/metrics/hpc
@@ -302,7 +307,7 @@ Assistant unique IDs, run one publisher per controller to keep entities stable.
 uses `min`; `temperature_c` uses `°C`; `power_on_hours` uses `h`;
 `data_written_tb` uses `TB`; warning and error metrics are unitless.
 
-With `--dev ppp0`, network metrics publish state to:
+With `--ha-device-id hpc --dev ppp0`, network metrics publish state to:
 
 ```text
 homelab-ha-discovery/ppp0/metrics/hpc

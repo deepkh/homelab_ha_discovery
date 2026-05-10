@@ -18,10 +18,10 @@
 - Python 3 code for Debian homelab hosts runs on the host itself, usually via a systemd timer.
 - Python 3 code for ASUS router collectors runs on a Debian homelab host and collects router data via SSH remote commands. The user will provide the required router CLI commands.
 - Each Python 3 script runs independently. The rough code flow is:
-  - `src/homelab_ha_discovery/scripts/publish_cpu_metrics.py --device <device>` -> parse CPU usage from the `top` CLI tool and CPU temperature from the `sensors` CLI tool -> publish the data to the MQTT server.
-  - `src/homelab_ha_discovery/scripts/publish_sdx_metrics.py --device <device> --dev <path>` -> run `sudo smartctl -a <path>` locally, parse disk SMART attributes, derive the disk component from the device path basename such as `sda` for `/dev/sda` -> publish the data to the MQTT server.
-  - `src/homelab_ha_discovery/scripts/publish_nvme_metrics.py --device <device> --dev <path>` -> run `sudo smartctl -a <path>` locally, parse NVMe SMART fields, derive the NVMe component from the device path basename such as `nvme0` for `/dev/nvme0` -> publish the data to the MQTT server.
-  - `src/homelab_ha_discovery/scripts/publish_network_metrics.py --device <device> --dev <interface>` -> read Linux interface byte counters with `psutil.net_io_counters(pernic=True)`, compute download/upload speed from two samples, use the interface name as the MQTT/Home Assistant component, and publish the data to the MQTT server.
+  - `src/homelab_ha_discovery/scripts/publish_cpu_metrics.py --ha-device-id <device>` -> parse CPU usage from the `top` CLI tool and CPU temperature from the `sensors` CLI tool -> publish the data to the MQTT server.
+  - `src/homelab_ha_discovery/scripts/publish_sdx_metrics.py --ha-device-id <device> --dev <path>` -> run `sudo smartctl -a <path>` locally, parse disk SMART attributes, derive the disk component from the device path basename such as `sda` for `/dev/sda` -> publish the data to the MQTT server.
+  - `src/homelab_ha_discovery/scripts/publish_nvme_metrics.py --ha-device-id <device> --dev <path>` -> run `sudo smartctl -a <path>` locally, parse NVMe SMART fields, derive the NVMe component from the device path basename such as `nvme0` for `/dev/nvme0` -> publish the data to the MQTT server.
+  - `src/homelab_ha_discovery/scripts/publish_network_metrics.py --ha-device-id <device> --dev <interface>` -> read Linux interface byte counters with `psutil.net_io_counters(pernic=True)`, compute download/upload speed from two samples, use the interface name as the MQTT/Home Assistant component, and publish the data to the MQTT server.
 - MQTT payloads and discovery configuration should follow Home Assistant-compatible formats.
 - Debian homelab hosts run Debian 13 on x86_64.
 - ASUS routers are ASUS WiFi routers.
