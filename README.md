@@ -68,7 +68,7 @@ The scripts read MQTT settings from the environment and also try to load `/etc/h
 Supported environment variables:
 
 - `HA_MQTT_HOST`, default `mqtt-server-ip`
-- `HA_MQTT_PORT`, default `1833`
+- `HA_MQTT_PORT`, default `1883`
 - `HA_MQTT_TOPIC_PREFIX`, default `homelab-ha-discovery`
 - `HA_MQTT_USERNAME`, optional MQTT username
 - `HA_MQTT_PASSWORD`, optional MQTT password
@@ -81,11 +81,69 @@ Example environment file:
 
 ```bash
 HA_MQTT_HOST=mqtt-server-ip
-HA_MQTT_PORT=1833
+HA_MQTT_PORT=1883
 HA_MQTT_TOPIC_PREFIX=homelab-ha-discovery
 HA_MQTT_USERNAME=your-user
 HA_MQTT_PASSWORD=your-password
 ```
+
+## Clean Host Systemd Installer
+
+A clean Debian host can be bootstrapped from a checkout with:
+
+```bash
+sudo python3 src/homelab_ha_discovery/scripts/install_debian_host_systemd.py bootstrap --ha-device-id hpc
+```
+
+`bootstrap` copies the current checkout to `/opt/homelab-ha-discovery`, refuses
+to replace that directory unless `--force-copy` is passed, creates
+`/opt/homelab-ha-discovery/.venv`, installs `requirements.txt`, creates
+`/etc/homelab-ha-discovery`, and writes a reviewable
+`/etc/homelab-ha-discovery/host-metrics.json`. The copy excludes `.git`,
+`.venv`, caches, and local session artifacts.
+
+Debian package installation is opt-in:
+
+```bash
+sudo python3 src/homelab_ha_discovery/scripts/install_debian_host_systemd.py bootstrap --ha-device-id hpc --install-system-packages
+```
+
+If `/etc/homelab-ha-discovery/mqtt.env` is missing, `bootstrap` creates it with
+editable example settings and mode `600`, then prints a warning. Edit the file
+before enabling services:
+
+```bash
+sudo editor /etc/homelab-ha-discovery/mqtt.env
+sudo editor /etc/homelab-ha-discovery/host-metrics.json
+```
+
+After reviewing the detected metrics config, generate and enable long-running
+systemd services:
+
+```bash
+sudo python3 /opt/homelab-ha-discovery/src/homelab_ha_discovery/scripts/install_debian_host_systemd.py install
+sudo python3 /opt/homelab-ha-discovery/src/homelab_ha_discovery/scripts/install_debian_host_systemd.py enable --now
+python3 /opt/homelab-ha-discovery/src/homelab_ha_discovery/scripts/install_debian_host_systemd.py status
+```
+
+Generated units use `EnvironmentFile=-/etc/homelab-ha-discovery/mqtt.env`, but
+`enable --now` refuses to enable/start services when the real env file is
+missing unless `--allow-missing-mqtt-env` is passed. The units run the existing
+publishers in long-running `--timer` mode. Default intervals are CPU and GPU
+`5.0` seconds, disk and NVMe SMART `60.0` seconds, and network `1.0` second.
+Generated `host-metrics.json` also includes a top-level
+`timer_publish_discovery_config` default of `60.0`, so generated services
+republish retained Home Assistant discovery config every 60 seconds. Set it to
+`null` to disable that globally, or add `timer_publish_discovery_config` to an
+individual service entry to override it for that service.
+
+The installer does not configure sudoers. Disk and NVMe SMART publishers run
+`sudo smartctl -a <dev>`, so configure non-interactive sudo permission for the
+service user when those services will not run as root.
+
+For a harmless preview, pass `--dry-run`. For tests or non-default layouts, the
+installer subcommands also accept `--app-dir`, `--config-dir`, and
+`--systemd-dir`.
 
 ## Usage
 
@@ -355,6 +413,7 @@ python3 -m py_compile src/homelab_ha_discovery/collectors/nvme_smart.py
 python3 -m py_compile src/homelab_ha_discovery/scripts/publish_nvme_metrics.py
 python3 -m py_compile src/homelab_ha_discovery/collectors/network_linux.py
 python3 -m py_compile src/homelab_ha_discovery/scripts/publish_network_metrics.py
+python3 -m py_compile src/homelab_ha_discovery/scripts/install_debian_host_systemd.py
 ```
 
 Run `pytest` if tests are present.

@@ -27,11 +27,11 @@
 - ASUS routers are ASUS WiFi routers.
  
 ## Local services
-MQTT server: `mqtt-server-ip:1833`.
+MQTT server: `mqtt-server-ip:1883`.
 
 Recommended environment variables:
 - `HA_MQTT_HOST=mqtt-server-ip`
-- `HA_MQTT_PORT=1833`
+- `HA_MQTT_PORT=1883`
 - `HA_MQTT_TOPIC_PREFIX=homelab-ha-discovery`
 - `HA_MQTT_USERNAME=...`
 - `HA_MQTT_PASSWORD=...`

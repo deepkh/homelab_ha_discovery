@@ -68,7 +68,7 @@ pip freeze > requirements.txt
 支援的環境變數：
 
 - `HA_MQTT_HOST`，預設 `mqtt-server-ip`
-- `HA_MQTT_PORT`，預設 `1833`
+- `HA_MQTT_PORT`，預設 `1883`
 - `HA_MQTT_TOPIC_PREFIX`，預設 `homelab-ha-discovery`
 - `HA_MQTT_USERNAME`，選用 MQTT username
 - `HA_MQTT_PASSWORD`，選用 MQTT password
@@ -81,11 +81,66 @@ pip freeze > requirements.txt
 
 ```bash
 HA_MQTT_HOST=mqtt-server-ip
-HA_MQTT_PORT=1833
+HA_MQTT_PORT=1883
 HA_MQTT_TOPIC_PREFIX=homelab-ha-discovery
 HA_MQTT_USERNAME=your-user
 HA_MQTT_PASSWORD=your-password
 ```
+
+## 乾淨主機 systemd 安裝器
+
+可以從 checkout 將乾淨的 Debian 主機 bootstrap 起來：
+
+```bash
+sudo python3 src/homelab_ha_discovery/scripts/install_debian_host_systemd.py bootstrap --ha-device-id hpc
+```
+
+`bootstrap` 會將目前 checkout 複製到 `/opt/homelab-ha-discovery`，如果該目錄
+已存在，除非傳入 `--force-copy`，否則會拒絕取代；接著建立
+`/opt/homelab-ha-discovery/.venv`、安裝 `requirements.txt`、建立
+`/etc/homelab-ha-discovery`，並寫入可審閱的
+`/etc/homelab-ha-discovery/host-metrics.json`。複製時會排除 `.git`、`.venv`、
+caches 與本機 session artifacts。
+
+Debian package 安裝必須明確選用：
+
+```bash
+sudo python3 src/homelab_ha_discovery/scripts/install_debian_host_systemd.py bootstrap --ha-device-id hpc --install-system-packages
+```
+
+如果 `/etc/homelab-ha-discovery/mqtt.env` 不存在，`bootstrap` 會用可編輯的範例
+設定建立它，權限為 `600`，然後印出警告。請在啟用 services 前編輯該檔案：
+
+```bash
+sudo editor /etc/homelab-ha-discovery/mqtt.env
+sudo editor /etc/homelab-ha-discovery/host-metrics.json
+```
+
+審閱偵測出的 metrics config 後，產生並啟用長時間執行的 systemd services：
+
+```bash
+sudo python3 /opt/homelab-ha-discovery/src/homelab_ha_discovery/scripts/install_debian_host_systemd.py install
+sudo python3 /opt/homelab-ha-discovery/src/homelab_ha_discovery/scripts/install_debian_host_systemd.py enable --now
+python3 /opt/homelab-ha-discovery/src/homelab_ha_discovery/scripts/install_debian_host_systemd.py status
+```
+
+產生的 units 會使用 `EnvironmentFile=-/etc/homelab-ha-discovery/mqtt.env`，但
+當真正的 env 檔不存在時，`enable --now` 會拒絕 enable/start services，除非傳入
+`--allow-missing-mqtt-env`。這些 units 會以長時間執行的 `--timer` 模式執行現有
+publishers。預設 interval 為 CPU 和 GPU `5.0` 秒、磁碟和 NVMe SMART `60.0`
+秒、network `1.0` 秒。
+產生的 `host-metrics.json` 也會包含 top-level
+`timer_publish_discovery_config`，預設值為 `60.0`，因此產生的 services 會每
+60 秒重新發布保留的 Home Assistant discovery config。將它設為 `null` 可全域
+停用；也可以在個別 service entry 加入 `timer_publish_discovery_config` 來覆寫該
+service 的設定。
+
+安裝器不會設定 sudoers。磁碟與 NVMe SMART publishers 會執行
+`sudo smartctl -a <dev>`，因此如果這些 services 不會以 root 執行，請為 service
+user 設定非互動式 sudo 權限。
+
+若要無害預覽，請傳入 `--dry-run`。若要測試或使用非預設 layout，安裝器的
+subcommands 也接受 `--app-dir`、`--config-dir` 與 `--systemd-dir`。
 
 ## 使用方式
 
@@ -345,6 +400,7 @@ python3 -m py_compile src/homelab_ha_discovery/collectors/nvme_smart.py
 python3 -m py_compile src/homelab_ha_discovery/scripts/publish_nvme_metrics.py
 python3 -m py_compile src/homelab_ha_discovery/collectors/network_linux.py
 python3 -m py_compile src/homelab_ha_discovery/scripts/publish_network_metrics.py
+python3 -m py_compile src/homelab_ha_discovery/scripts/install_debian_host_systemd.py
 ```
 
 如果有測試，請執行 `pytest`。
