@@ -20,7 +20,7 @@ AI agent 和 repository 維護規則請見 [AGENTS.md](AGENTS.md)。
 - 從 `requirements.txt` 安裝的 `paho-mqtt`
 - 用於 CPU 指標發布的 `top` 和 `sensors`。在 Debian 上，`sensors` 由 `lm-sensors` 提供。
 - 用於 NVIDIA GPU 發布的 `nvidia-smi`
-- 用於磁碟 SMART 發布的 `smartctl`。在 Debian 上，`smartctl` 由 `smartmontools` 提供。
+- 用於磁碟與 NVMe SMART 發布的 `smartctl`。在 Debian 上，`smartctl` 由 `smartmontools` 提供。
 - MQTT broker 存取權限
 
 ## 安裝設定
@@ -117,10 +117,21 @@ python3 src/homelab_ha_discovery/scripts/publish_gpu_metrics.py --device hpc --g
 python3 src/homelab_ha_discovery/scripts/publish_sdx_metrics.py --device hpc --dev /dev/sda
 ```
 
-SMART 發布器會在本機執行 `sudo smartctl -a <dev>`。請在此 repository
+磁碟 SMART 發布器會在本機執行 `sudo smartctl -a <dev>`。請在此 repository
 外部設定 sudo，讓 service user 可以非互動式執行所需的 `smartctl` 指令。
 MQTT 和 Home Assistant discovery 中的磁碟 component 會由 `--dev` 的 basename
 產生，例如 `/dev/sda` 會使用 `sda`。
+
+NVMe SMART 指標：
+
+```bash
+python3 src/homelab_ha_discovery/scripts/publish_nvme_metrics.py --device hpc --dev /dev/nvme0
+```
+
+NVMe SMART 發布器也會在本機執行 `sudo smartctl -a <dev>`。請為每個 NVMe
+controller 執行一個 process 或 service，例如 `/dev/nvme0`、`/dev/nvme1`
+等等。MQTT 和 Home Assistant discovery 中的 NVMe component 會由 `--dev`
+的 basename 產生，例如 `/dev/nvme0` 會使用 `nvme0`。
 
 若要頻繁透過 systemd timer 執行，請在一般執行已註冊 discovery config 後使用 `--publisher-only`：
 
@@ -128,6 +139,7 @@ MQTT 和 Home Assistant discovery 中的磁碟 component 會由 `--dev` 的 base
 python3 src/homelab_ha_discovery/scripts/publish_cpu_metrics.py --device hpc --publisher-only
 python3 src/homelab_ha_discovery/scripts/publish_gpu_metrics.py --device hpc --publisher-only
 python3 src/homelab_ha_discovery/scripts/publish_sdx_metrics.py --device hpc --dev /dev/sda --publisher-only
+python3 src/homelab_ha_discovery/scripts/publish_nvme_metrics.py --device hpc --dev /dev/nvme0 --publisher-only
 ```
 
 若要使用長時間執行的服務模式，請使用 `--timer SECONDS`。第一次指標發布會立即發生，之後腳本會在每次發布嘗試之間休眠：
@@ -136,6 +148,7 @@ python3 src/homelab_ha_discovery/scripts/publish_sdx_metrics.py --device hpc --d
 python3 src/homelab_ha_discovery/scripts/publish_cpu_metrics.py --device hpc --timer 5.0
 python3 src/homelab_ha_discovery/scripts/publish_gpu_metrics.py --device hpc --timer 5.0
 python3 src/homelab_ha_discovery/scripts/publish_sdx_metrics.py --device hpc --dev /dev/sda --timer 5.0
+python3 src/homelab_ha_discovery/scripts/publish_nvme_metrics.py --device hpc --dev /dev/nvme0 --timer 5.0
 ```
 
 未使用 `--publisher-only` 時，`--timer` 會在啟動時發布一次 discovery config，之後每個 interval 只發布 metric state。使用 `--timer --publisher-only` 時，每個 interval 只發布 metric state。
@@ -146,6 +159,7 @@ python3 src/homelab_ha_discovery/scripts/publish_sdx_metrics.py --device hpc --d
 python3 src/homelab_ha_discovery/scripts/publish_cpu_metrics.py --device hpc --timer 5.0 --timer-publish-discovery-config 60.0
 python3 src/homelab_ha_discovery/scripts/publish_gpu_metrics.py --device hpc --timer 5.0 --timer-publish-discovery-config 60.0
 python3 src/homelab_ha_discovery/scripts/publish_sdx_metrics.py --device hpc --dev /dev/sda --timer 5.0 --timer-publish-discovery-config 60.0
+python3 src/homelab_ha_discovery/scripts/publish_nvme_metrics.py --device hpc --dev /dev/nvme0 --timer 5.0 --timer-publish-discovery-config 60.0
 ```
 
 如果未設定 `--timer-publish-discovery-config`，timer 行為會維持只在啟動時發布一次 discovery。此選項需要 `--timer`，且不能與 `--publisher-only` 一起使用。
@@ -233,6 +247,38 @@ Home Assistant sensor 名稱也會使用磁碟 component，例如 `hpc sda Power
 Hours`。因為磁碟 component 會包含在 Home Assistant unique ID 中，變更
 `--dev` 會改變 entities。
 
+使用 `--dev /dev/nvme0` 時，NVMe SMART 指標會將 state 發布到：
+
+```text
+homelab-ha-discovery/nvme0/metrics/hpc
+```
+
+Payload：
+
+```json
+{"Critical Warning":0,"Media and Data Integrity Errors":0,"Available Spare":100,"Percentage Used":3,"Critical Temperature Time":0,"temperature_c":35,"data_written_tb":5.06,"power_on_hours":6528}
+```
+
+Discovery topics：
+
+```text
+homeassistant/sensor/homelab_ha_discovery_hpc_nvme0_critical_warning/config
+homeassistant/sensor/homelab_ha_discovery_hpc_nvme0_media_data_integrity_errors/config
+homeassistant/sensor/homelab_ha_discovery_hpc_nvme0_available_spare/config
+homeassistant/sensor/homelab_ha_discovery_hpc_nvme0_percentage_used/config
+homeassistant/sensor/homelab_ha_discovery_hpc_nvme0_critical_temperature_time/config
+homeassistant/sensor/homelab_ha_discovery_hpc_nvme0_temperature_c/config
+homeassistant/sensor/homelab_ha_discovery_hpc_nvme0_data_written_tb/config
+homeassistant/sensor/homelab_ha_discovery_hpc_nvme0_power_on_hours/config
+```
+
+Home Assistant sensor 名稱也會使用 NVMe component，例如 `hpc nvme0
+Available Spare`。因為 NVMe component 會包含在 Home Assistant unique ID
+中，請為每個 controller 執行一個 publisher，以保持 entities 穩定。
+`Available Spare` 和 `Percentage Used` 使用 `%`；`Critical Temperature Time`
+使用 `min`；`temperature_c` 使用 `°C`；`power_on_hours` 使用 `h`；
+`data_written_tb` 使用 `TB`；warning 和 error 指標沒有單位。
+
 如果設定了 `MQTT_TOPIC`，發布器會將它作為 state topic，且 discovery config
 會指向同一個 topic。
 
@@ -253,6 +299,8 @@ python3 -m py_compile src/homelab_ha_discovery/collectors/gpu_nvidia.py
 python3 -m py_compile src/homelab_ha_discovery/scripts/publish_gpu_metrics.py
 python3 -m py_compile src/homelab_ha_discovery/collectors/disk_smart.py
 python3 -m py_compile src/homelab_ha_discovery/scripts/publish_sdx_metrics.py
+python3 -m py_compile src/homelab_ha_discovery/collectors/nvme_smart.py
+python3 -m py_compile src/homelab_ha_discovery/scripts/publish_nvme_metrics.py
 ```
 
 如果有測試，請執行 `pytest`。

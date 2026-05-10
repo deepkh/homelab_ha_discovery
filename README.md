@@ -20,7 +20,7 @@ For AI agent and repository maintenance rules, see [AGENTS.md](AGENTS.md).
 - `paho-mqtt`, installed from `requirements.txt`
 - `top` and `sensors` for CPU metrics publishing. On Debian, `sensors` is provided by `lm-sensors`.
 - `nvidia-smi` for NVIDIA GPU publishing
-- `smartctl` for disk SMART publishing. On Debian, `smartctl` is provided by `smartmontools`.
+- `smartctl` for disk and NVMe SMART publishing. On Debian, `smartctl` is provided by `smartmontools`.
 - MQTT broker access
 
 ## Setup
@@ -117,11 +117,22 @@ Disk SMART metrics:
 python3 src/homelab_ha_discovery/scripts/publish_sdx_metrics.py --device hpc --dev /dev/sda
 ```
 
-The SMART publisher runs `sudo smartctl -a <dev>` locally. Configure sudo
+The disk SMART publisher runs `sudo smartctl -a <dev>` locally. Configure sudo
 outside this repository so the service user can run the required `smartctl`
 command non-interactively. The disk component in MQTT and Home Assistant
 discovery is derived from the `--dev` basename, for example `sda` for
 `/dev/sda`.
+
+NVMe SMART metrics:
+
+```bash
+python3 src/homelab_ha_discovery/scripts/publish_nvme_metrics.py --device hpc --dev /dev/nvme0
+```
+
+The NVMe SMART publisher also runs `sudo smartctl -a <dev>` locally. Run one
+process or service per NVMe controller, for example `/dev/nvme0`, `/dev/nvme1`,
+and so on. The NVMe component in MQTT and Home Assistant discovery is derived
+from the `--dev` basename, for example `nvme0` for `/dev/nvme0`.
 
 For frequent systemd timer runs, use `--publisher-only` after a normal run has registered discovery config:
 
@@ -129,6 +140,7 @@ For frequent systemd timer runs, use `--publisher-only` after a normal run has r
 python3 src/homelab_ha_discovery/scripts/publish_cpu_metrics.py --device hpc --publisher-only
 python3 src/homelab_ha_discovery/scripts/publish_gpu_metrics.py --device hpc --publisher-only
 python3 src/homelab_ha_discovery/scripts/publish_sdx_metrics.py --device hpc --dev /dev/sda --publisher-only
+python3 src/homelab_ha_discovery/scripts/publish_nvme_metrics.py --device hpc --dev /dev/nvme0 --publisher-only
 ```
 
 For long-running service mode, use `--timer SECONDS`. The first metric publish happens immediately, then the script sleeps between publish attempts:
@@ -137,6 +149,7 @@ For long-running service mode, use `--timer SECONDS`. The first metric publish h
 python3 src/homelab_ha_discovery/scripts/publish_cpu_metrics.py --device hpc --timer 5.0
 python3 src/homelab_ha_discovery/scripts/publish_gpu_metrics.py --device hpc --timer 5.0
 python3 src/homelab_ha_discovery/scripts/publish_sdx_metrics.py --device hpc --dev /dev/sda --timer 5.0
+python3 src/homelab_ha_discovery/scripts/publish_nvme_metrics.py --device hpc --dev /dev/nvme0 --timer 5.0
 ```
 
 Without `--publisher-only`, `--timer` publishes discovery config once at startup, then publishes only metric state each interval. With `--timer --publisher-only`, it publishes only metric state each interval.
@@ -147,6 +160,7 @@ To republish retained discovery config periodically during long-running service 
 python3 src/homelab_ha_discovery/scripts/publish_cpu_metrics.py --device hpc --timer 5.0 --timer-publish-discovery-config 60.0
 python3 src/homelab_ha_discovery/scripts/publish_gpu_metrics.py --device hpc --timer 5.0 --timer-publish-discovery-config 60.0
 python3 src/homelab_ha_discovery/scripts/publish_sdx_metrics.py --device hpc --dev /dev/sda --timer 5.0 --timer-publish-discovery-config 60.0
+python3 src/homelab_ha_discovery/scripts/publish_nvme_metrics.py --device hpc --dev /dev/nvme0 --timer 5.0 --timer-publish-discovery-config 60.0
 ```
 
 If `--timer-publish-discovery-config` is not set, timer behavior stays discovery-once. This option requires `--timer` and cannot be combined with `--publisher-only`.
@@ -234,6 +248,38 @@ The Home Assistant sensor names also use the disk component, for example
 `hpc sda Power On Hours`. Because the disk component is included in Home
 Assistant unique IDs, changing `--dev` changes the entities.
 
+With `--dev /dev/nvme0`, NVMe SMART metrics publish state to:
+
+```text
+homelab-ha-discovery/nvme0/metrics/hpc
+```
+
+Payload:
+
+```json
+{"Critical Warning":0,"Media and Data Integrity Errors":0,"Available Spare":100,"Percentage Used":3,"Critical Temperature Time":0,"temperature_c":35,"data_written_tb":5.06,"power_on_hours":6528}
+```
+
+Discovery topics:
+
+```text
+homeassistant/sensor/homelab_ha_discovery_hpc_nvme0_critical_warning/config
+homeassistant/sensor/homelab_ha_discovery_hpc_nvme0_media_data_integrity_errors/config
+homeassistant/sensor/homelab_ha_discovery_hpc_nvme0_available_spare/config
+homeassistant/sensor/homelab_ha_discovery_hpc_nvme0_percentage_used/config
+homeassistant/sensor/homelab_ha_discovery_hpc_nvme0_critical_temperature_time/config
+homeassistant/sensor/homelab_ha_discovery_hpc_nvme0_temperature_c/config
+homeassistant/sensor/homelab_ha_discovery_hpc_nvme0_data_written_tb/config
+homeassistant/sensor/homelab_ha_discovery_hpc_nvme0_power_on_hours/config
+```
+
+The Home Assistant sensor names also use the NVMe component, for example
+`hpc nvme0 Available Spare`. Because the NVMe component is included in Home
+Assistant unique IDs, run one publisher per controller to keep entities stable.
+`Available Spare` and `Percentage Used` use `%`; `Critical Temperature Time`
+uses `min`; `temperature_c` uses `°C`; `power_on_hours` uses `h`;
+`data_written_tb` uses `TB`; warning and error metrics are unitless.
+
 If `MQTT_TOPIC` is set, publishers use it as the state topic and discovery config
 points to that exact topic.
 
@@ -254,6 +300,8 @@ python3 -m py_compile src/homelab_ha_discovery/collectors/gpu_nvidia.py
 python3 -m py_compile src/homelab_ha_discovery/scripts/publish_gpu_metrics.py
 python3 -m py_compile src/homelab_ha_discovery/collectors/disk_smart.py
 python3 -m py_compile src/homelab_ha_discovery/scripts/publish_sdx_metrics.py
+python3 -m py_compile src/homelab_ha_discovery/collectors/nvme_smart.py
+python3 -m py_compile src/homelab_ha_discovery/scripts/publish_nvme_metrics.py
 ```
 
 Run `pytest` if tests are present.
