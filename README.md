@@ -10,7 +10,7 @@
 
 Python MQTT publishers for homelab metrics with Home Assistant MQTT discovery.
 
-The current runnable publishers collect metrics from the local Debian host and publish JSON payloads to MQTT. Normal runs publish retained Home Assistant discovery config first, then publish the current metric state. External systemd timer runs can use `--publisher-only` after discovery has already been registered. Long-running service mode is also available with `--timer SECONDS`.
+The current runnable publishers collect metrics from the local Debian host and ASUS routers over SSH, then publish JSON payloads to MQTT. Normal runs publish retained Home Assistant discovery config first, then publish the current metric state. External systemd timer runs can use `--publisher-only` after discovery has already been registered. Long-running service mode is also available with `--timer SECONDS`.
 
 For AI agent and repository maintenance rules, see [AGENTS.md](AGENTS.md).
 
@@ -21,6 +21,7 @@ For AI agent and repository maintenance rules, see [AGENTS.md](AGENTS.md).
 - `top` and `sensors` for CPU metrics publishing. On Debian, `sensors` is provided by `lm-sensors`.
 - `nvidia-smi` for NVIDIA GPU publishing
 - `smartctl` for disk and NVMe SMART publishing. On Debian, `smartctl` is provided by `smartmontools`.
+- `ssh` client access for ASUS router publishing
 - MQTT broker access
 
 ## Setup
@@ -102,6 +103,24 @@ to replace that directory unless `--force-copy` is passed, creates
 `/etc/homelab-ha-discovery/host-metrics.json`. The copy excludes `.git`,
 `.venv`, caches, and local session artifacts.
 
+`--force-copy` only replaces the installed app directory. If
+`/etc/homelab-ha-discovery/host-metrics.json` already exists, `bootstrap` keeps
+it unless `--force-config` is also passed:
+
+```bash
+sudo python3 src/homelab_ha_discovery/scripts/install_debian_host_systemd.py bootstrap --ha-device-id hpc --force-copy --force-config
+```
+
+To regenerate only `host-metrics.json` without copying the app or rebuilding the
+virtual environment, run detect with `--force`:
+
+```bash
+sudo python3 src/homelab_ha_discovery/scripts/install_debian_host_systemd.py detect --ha-device-id hpc --force
+```
+
+Both `--force-config` and `detect --force` replace the whole generated config,
+so preserve any manual edits first.
+
 Debian package installation is opt-in:
 
 ```bash
@@ -123,19 +142,99 @@ systemd services:
 ```bash
 sudo python3 /opt/homelab-ha-discovery/src/homelab_ha_discovery/scripts/install_debian_host_systemd.py install
 sudo python3 /opt/homelab-ha-discovery/src/homelab_ha_discovery/scripts/install_debian_host_systemd.py enable --now
+sudo python3 /opt/homelab-ha-discovery/src/homelab_ha_discovery/scripts/install_debian_host_systemd.py logs --follow
 python3 /opt/homelab-ha-discovery/src/homelab_ha_discovery/scripts/install_debian_host_systemd.py status
 ```
+
+During `install`, if existing
+`/etc/systemd/system/homelab-ha-discovery-*.service` files are present and stdin
+is interactive, the installer prompts before removing them. Answering yes
+removes those generated unit files before writing the units from the current
+`host-metrics.json`; answering no keeps them. For scripted runs, pass
+`--clean-existing-units` to remove them without prompting, or
+`--no-clean-existing-units` to keep them without prompting. The cleanup only
+removes matching unit files; it does not stop services or edit
+`host-metrics.json`.
+
+After units are installed, the installer can manage the generated services:
+
+```bash
+sudo python3 /opt/homelab-ha-discovery/src/homelab_ha_discovery/scripts/install_debian_host_systemd.py logs
+sudo python3 /opt/homelab-ha-discovery/src/homelab_ha_discovery/scripts/install_debian_host_systemd.py logs --follow --lines 200 --since "1 hour ago"
+sudo python3 /opt/homelab-ha-discovery/src/homelab_ha_discovery/scripts/install_debian_host_systemd.py restart
+sudo python3 /opt/homelab-ha-discovery/src/homelab_ha_discovery/scripts/install_debian_host_systemd.py stop
+sudo python3 /opt/homelab-ha-discovery/src/homelab_ha_discovery/scripts/install_debian_host_systemd.py disable --now
+sudo python3 /opt/homelab-ha-discovery/src/homelab_ha_discovery/scripts/install_debian_host_systemd.py uninstall
+```
+
+`logs` reads the journal for the generated units. `restart`, `stop`, and
+`disable` operate on the units described by the current `host-metrics.json`;
+`disable --now` also stops them. `uninstall` scans for matching generated unit
+files, stops and disables those units, removes only the generated
+`homelab-ha-discovery-*.service` files, and reloads systemd. It leaves the app
+directory, `host-metrics.json`, `mqtt.env`, MQTT retained discovery config, and
+Home Assistant entities untouched.
 
 Generated units use `EnvironmentFile=-/etc/homelab-ha-discovery/mqtt.env`, but
 `enable --now` refuses to enable/start services when the real env file is
 missing unless `--allow-missing-mqtt-env` is passed. The units run the existing
 publishers in long-running `--timer` mode. Default intervals are CPU and GPU
-`5.0` seconds, disk and NVMe SMART `60.0` seconds, and network `1.0` second.
+`5.0` seconds, disk and NVMe SMART `60.0` seconds, network `1.0`
+second, ASUS router CPU `1.0` second, ASUS router network `1.0` second, and
+ASUS router connected clients `1.0` second.
 Generated `host-metrics.json` also includes a top-level
 `timer_publish_discovery_config` default of `60.0`, so generated services
 republish retained Home Assistant discovery config every 60 seconds. Set it to
 `null` to disable that globally, or add `timer_publish_discovery_config` to an
 individual service entry to override it for that service.
+
+Detect/bootstrap also adds disabled ASUS router template entries without probing
+the router over SSH:
+
+```json
+[
+  {
+    "type": "asus_router_cpu",
+    "enabled": false,
+    "timer": 1.0,
+    "router_name": "ASUS AX86U",
+    "ssh_user": "router-user",
+    "ssh_ip": "router-ip-address",
+    "ssh_port": 22,
+    "note": "disabled template; edit SSH settings and enable manually"
+  },
+  {
+    "type": "asus_router_connected_clients",
+    "enabled": false,
+    "timer": 1.0,
+    "router_name": "ASUS AX86U",
+    "ssh_user": "router-user",
+    "ssh_ip": "router-ip-address",
+    "ssh_port": 22,
+    "note": "disabled template; edit SSH settings and enable manually"
+  },
+  {
+    "type": "asus_router_network",
+    "enabled": false,
+    "timer": 1.0,
+    "router_name": "ASUS AX86U",
+    "dev": "eth0",
+    "ssh_user": "router-user",
+    "ssh_ip": "router-ip-address",
+    "ssh_port": 22,
+    "note": "disabled template; edit SSH settings and enable manually"
+  }
+]
+```
+
+Edit those entries before enabling them. Add more ASUS router entries to monitor
+multiple routers; keep each `router_name` stable because it is used in generated
+service names, MQTT topics, and Home Assistant unique IDs. Connected-client
+entries may include `client_list_command` to override the default remote
+command. Router network entries use the `router_name` and `dev` combination in
+generated unit names, so multiple interfaces on one router stay separate.
+Router network entries may include `network_command` to override the default
+remote `/proc/net/dev` sampler.
 
 The installer does not configure sudoers. Disk and NVMe SMART publishers run
 `sudo smartctl -a <dev>`, so configure non-interactive sudo permission for the
@@ -207,8 +306,71 @@ python3 src/homelab_ha_discovery/scripts/publish_network_metrics.py --ha-device-
 The network publisher uses `psutil.net_io_counters(pernic=True)` locally.
 `--dev` must match a network interface key, for example `ppp0`. Without
 `--timer`, it takes two samples one second apart and publishes one calculated
-throughput state. Speeds are published in `KB/s`, where `KB` means 1024 bytes,
-and values are rounded to two decimal places.
+throughput state. Speeds are published in `Mbps`, where `Mbps` means megabits
+per second using 1,000,000 bits per second. Values are rounded to three decimal
+places; `0.001` means 1 Kbps and `1.000` means 1 Mbps.
+
+ASUS router CPU metrics:
+
+```bash
+python3 src/homelab_ha_discovery/scripts/publish_asus_router_cpu_metrics.py --ha-device-id hpc --router-name "ASUS AX86U" --ssh-user router-user --ssh-ip router-ip-address
+```
+
+The ASUS router CPU publisher runs `top -bn1` and
+`cat /sys/class/thermal/thermal_zone*/temp` remotely over SSH. `--ssh-port`
+defaults to `22`. `--ha-device-id` remains the Home Assistant/MQTT device
+identity; `--router-name` is normalized into the router component, for example
+`asus_ax86u` for `ASUS AX86U`. Temperature output is treated as millidegrees
+Celsius, and the highest valid thermal zone value is published. Each remote SSH
+command has a 10-second timeout. If a router needs different commands, override
+them with `--top-command` or `--temperature-command`; generated systemd config
+entries may also include `top_command` and `temperature_command`.
+
+ASUS router network metrics:
+
+```bash
+python3 src/homelab_ha_discovery/scripts/publish_asus_router_network_metrics.py --ha-device-id hpc --router-name "ASUS AX86U" --dev eth0 --ssh-user router-user --ssh-ip router-ip-address --ssh-port 22
+```
+
+The ASUS router network publisher generates a remote `/proc/net/dev` sampler
+for `--dev`, reads RX/TX bytes twice one second apart over SSH, validates that
+counters are present and non-decreasing, and publishes download/upload speeds
+in `Mbps`. `--ssh-port` defaults to `22`. `--ha-device-id` remains the Home
+Assistant/MQTT device identity; `--router-name` is normalized into the router
+component, for example `asus_ax86u` for `ASUS AX86U`; `--dev` is the router
+interface component, for example `eth0`. If a router needs a different command,
+override it with `--network-command`; generated systemd config entries may also
+include `network_command`.
+
+ASUS router connected-client metrics:
+
+```bash
+python3 src/homelab_ha_discovery/scripts/publish_asus_router_connected_clients_metrics.py --ha-device-id hpc --router-name "ASUS AX86U" --ssh-user router-user --ssh-ip router-ip-address --ssh-port 22
+```
+
+The ASUS router connected-client publisher runs
+`cat /var/lib/misc/dnsmasq.leases; echo "---END_LEASES---"; cat /tmp/clientlist.json`
+remotely over SSH. It recurses through nested `clientlist.json` objects, so
+top-level wrappers such as an AP MAC key are fine. It publishes every MAC found
+under ASUS interface sections such as `2G`, `5G`, and `wired_mac`; DHCP-only
+lease rows that are absent from `clientlist.json` are not included. MAC
+addresses are normalized to uppercase. DHCP hostnames are matched by MAC first,
+then IP as a fallback. Missing DHCP hostnames are published as `" - "`, and
+missing RSSI values, such as wired clients, are published as `"N/A"`. If a
+router needs a different command, override it with `--client-list-command`;
+generated systemd config entries may also include `client_list_command`.
+
+For manual troubleshooting, add `--debug` to print progress messages to stderr.
+For connected-client runs, debug output also includes the raw SSH output
+between begin/end markers, plus dnsmasq lease counts, `clientlist.json`
+top-level keys, matched interface sections, MAC counts, and sample extracted
+clients:
+
+```bash
+sudo /opt/homelab-ha-discovery/.venv/bin/python /opt/homelab-ha-discovery/src/homelab_ha_discovery/scripts/publish_asus_router_cpu_metrics.py --ha-device-id hpc --router-name "ASUS AX86U" --ssh-user router-user --ssh-ip router-ip-address --ssh-port 22 --timer 1.0 --timer-publish-discovery-config 60.0 --debug
+sudo /opt/homelab-ha-discovery/.venv/bin/python /opt/homelab-ha-discovery/src/homelab_ha_discovery/scripts/publish_asus_router_network_metrics.py --ha-device-id hpc --router-name "ASUS AX86U" --dev eth0 --ssh-user router-user --ssh-ip router-ip-address --ssh-port 22 --timer 1.0 --timer-publish-discovery-config 60.0 --debug
+sudo /opt/homelab-ha-discovery/.venv/bin/python /opt/homelab-ha-discovery/src/homelab_ha_discovery/scripts/publish_asus_router_connected_clients_metrics.py --ha-device-id hpc --router-name "ASUS AX86U" --ssh-user router-user --ssh-ip router-ip-address --ssh-port 22 --timer 1.0 --timer-publish-discovery-config 60.0 --debug
+```
 
 For frequent systemd timer runs, use `--publisher-only` after a normal run has registered discovery config:
 
@@ -218,12 +380,16 @@ python3 src/homelab_ha_discovery/scripts/publish_gpu_metrics.py --ha-device-id h
 python3 src/homelab_ha_discovery/scripts/publish_sdx_metrics.py --ha-device-id hpc --dev /dev/sda --publisher-only
 python3 src/homelab_ha_discovery/scripts/publish_nvme_metrics.py --ha-device-id hpc --dev /dev/nvme0 --publisher-only
 python3 src/homelab_ha_discovery/scripts/publish_network_metrics.py --ha-device-id hpc --dev ppp0 --publisher-only
+python3 src/homelab_ha_discovery/scripts/publish_asus_router_cpu_metrics.py --ha-device-id hpc --router-name "ASUS AX86U" --ssh-user router-user --ssh-ip router-ip-address --publisher-only
+python3 src/homelab_ha_discovery/scripts/publish_asus_router_network_metrics.py --ha-device-id hpc --router-name "ASUS AX86U" --dev eth0 --ssh-user router-user --ssh-ip router-ip-address --publisher-only
+python3 src/homelab_ha_discovery/scripts/publish_asus_router_connected_clients_metrics.py --ha-device-id hpc --router-name "ASUS AX86U" --ssh-user router-user --ssh-ip router-ip-address --publisher-only
 ```
 
 For long-running service mode, use `--timer SECONDS`. Most publishers publish
-the first metric immediately, then sleep between publish attempts. Network
-metrics establish a baseline first, wait one interval, then publish the first
-calculated speed:
+the first metric immediately, then sleep between publish attempts. Local
+network metrics establish a baseline first, wait one interval, then publish the
+first calculated speed. ASUS router network metrics perform their one-second
+remote sample during each publish attempt:
 
 ```bash
 python3 src/homelab_ha_discovery/scripts/publish_cpu_metrics.py --ha-device-id hpc --timer 5.0
@@ -231,13 +397,16 @@ python3 src/homelab_ha_discovery/scripts/publish_gpu_metrics.py --ha-device-id h
 python3 src/homelab_ha_discovery/scripts/publish_sdx_metrics.py --ha-device-id hpc --dev /dev/sda --timer 5.0
 python3 src/homelab_ha_discovery/scripts/publish_nvme_metrics.py --ha-device-id hpc --dev /dev/nvme0 --timer 5.0
 python3 src/homelab_ha_discovery/scripts/publish_network_metrics.py --ha-device-id hpc --dev ppp0 --timer 1.0
+python3 src/homelab_ha_discovery/scripts/publish_asus_router_cpu_metrics.py --ha-device-id hpc --router-name "ASUS AX86U" --ssh-user router-user --ssh-ip router-ip-address --timer 1.0
+python3 src/homelab_ha_discovery/scripts/publish_asus_router_network_metrics.py --ha-device-id hpc --router-name "ASUS AX86U" --dev eth0 --ssh-user router-user --ssh-ip router-ip-address --timer 1.0
+python3 src/homelab_ha_discovery/scripts/publish_asus_router_connected_clients_metrics.py --ha-device-id hpc --router-name "ASUS AX86U" --ssh-user router-user --ssh-ip router-ip-address --timer 1.0
 ```
 
 Without `--publisher-only`, `--timer` publishes discovery config once at
-startup, then publishes only metric state each interval. For network metrics,
-the startup discovery config is published before the first calculated metric
-state after the baseline interval. With `--timer --publisher-only`, it publishes
-only metric state each interval.
+startup, then publishes only metric state each interval. For local network
+metrics, the startup discovery config is published before the first calculated
+metric state after the baseline interval. With `--timer --publisher-only`, it
+publishes only metric state each interval.
 
 To republish retained discovery config periodically during long-running service mode, add `--timer-publish-discovery-config SECONDS`:
 
@@ -247,6 +416,9 @@ python3 src/homelab_ha_discovery/scripts/publish_gpu_metrics.py --ha-device-id h
 python3 src/homelab_ha_discovery/scripts/publish_sdx_metrics.py --ha-device-id hpc --dev /dev/sda --timer 5.0 --timer-publish-discovery-config 60.0
 python3 src/homelab_ha_discovery/scripts/publish_nvme_metrics.py --ha-device-id hpc --dev /dev/nvme0 --timer 5.0 --timer-publish-discovery-config 60.0
 python3 src/homelab_ha_discovery/scripts/publish_network_metrics.py --ha-device-id hpc --dev ppp0 --timer 1.0 --timer-publish-discovery-config 60.0
+python3 src/homelab_ha_discovery/scripts/publish_asus_router_cpu_metrics.py --ha-device-id hpc --router-name "ASUS AX86U" --ssh-user router-user --ssh-ip router-ip-address --timer 1.0 --timer-publish-discovery-config 60.0
+python3 src/homelab_ha_discovery/scripts/publish_asus_router_network_metrics.py --ha-device-id hpc --router-name "ASUS AX86U" --dev eth0 --ssh-user router-user --ssh-ip router-ip-address --timer 1.0 --timer-publish-discovery-config 60.0
+python3 src/homelab_ha_discovery/scripts/publish_asus_router_connected_clients_metrics.py --ha-device-id hpc --router-name "ASUS AX86U" --ssh-user router-user --ssh-ip router-ip-address --timer 1.0 --timer-publish-discovery-config 60.0
 ```
 
 If `--timer-publish-discovery-config` is not set, timer behavior stays discovery-once. This option requires `--timer` and cannot be combined with `--publisher-only`.
@@ -271,6 +443,79 @@ Discovery topics:
 homeassistant/sensor/homelab_ha_discovery_hpc_cpu_usage/config
 homeassistant/sensor/homelab_ha_discovery_hpc_cpu_temperature/config
 ```
+
+With `--ha-device-id hpc --router-name "ASUS AX86U"`, ASUS router CPU metrics
+publish state to:
+
+```text
+homelab-ha-discovery/asus_ax86u/cpu/metrics/hpc
+```
+
+Payload:
+
+```json
+{"CPU Usages":37.8,"Temperature":54.0}
+```
+
+Discovery topics:
+
+```text
+homeassistant/sensor/homelab_ha_discovery_hpc_asus_ax86u_cpu_usage/config
+homeassistant/sensor/homelab_ha_discovery_hpc_asus_ax86u_cpu_temperature/config
+```
+
+The Home Assistant sensor names also use the router name, for example
+`hpc ASUS AX86U CPU Usage`. Because the normalized router name is included in
+Home Assistant unique IDs, changing `--router-name` changes the entities.
+
+With `--ha-device-id hpc --router-name "ASUS AX86U" --dev eth0`, ASUS router
+network metrics publish state to:
+
+```text
+homelab-ha-discovery/asus_ax86u/eth0/metrics/hpc
+```
+
+Payload:
+
+```json
+{"Download Speed":0.001,"Upload Speed":1.0}
+```
+
+Discovery topics:
+
+```text
+homeassistant/sensor/homelab_ha_discovery_hpc_asus_ax86u_eth0_download_speed/config
+homeassistant/sensor/homelab_ha_discovery_hpc_asus_ax86u_eth0_upload_speed/config
+```
+
+The Home Assistant sensor names include the router name and interface, for
+example `hpc ASUS AX86U eth0 Download Speed`. Because the normalized router
+name and interface are included in Home Assistant unique IDs, changing either
+`--router-name` or `--dev` changes the entities.
+
+With `--ha-device-id hpc --router-name "ASUS AX86U"`, ASUS router
+connected-client metrics publish state to:
+
+```text
+homelab-ha-discovery/asus_ax86u/connected_clients/metrics/hpc
+```
+
+Payload:
+
+```json
+[{"mac":"8C:FD:49:49:7B:58","ip":"192.168.4.72","rssi":"-68","interface":"2G","name":"mushroom_02_pc0"}]
+```
+
+Discovery topic:
+
+```text
+homeassistant/sensor/homelab_ha_discovery_hpc_asus_ax86u_connected_clients/config
+```
+
+Home Assistant discovery creates one count sensor named like
+`hpc ASUS AX86U Connected Clients`; its value template reads the array length
+with `{{ value_json | count }}`. The detailed client list remains in the MQTT
+state payload.
 
 With `--ha-device-id hpc`, NVIDIA GPU metrics publish state to this topic when
 `--gpu` is omitted:
@@ -374,7 +619,7 @@ homelab-ha-discovery/ppp0/metrics/hpc
 Payload:
 
 ```json
-{"Download Speed":123.45,"Upload Speed":67.89}
+{"Download Speed":0.001,"Upload Speed":1.0}
 ```
 
 Discovery topics:
@@ -384,10 +629,12 @@ homeassistant/sensor/homelab_ha_discovery_hpc_ppp0_download_speed/config
 homeassistant/sensor/homelab_ha_discovery_hpc_ppp0_upload_speed/config
 ```
 
-Network speed sensors use `KB/s`, where `KB` means 1024 bytes. The Home
-Assistant sensor names also use the network interface component, for example
-`hpc ppp0 Download Speed`. Because the interface component is included in Home
-Assistant unique IDs, changing `--dev` changes the entities.
+Network speed sensors use `Mbps`, where `Mbps` means megabits per second using
+1,000,000 bits per second. Values are rounded to three decimal places; `0.001`
+means 1 Kbps and `1.000` means 1 Mbps. The Home Assistant sensor names also
+use the network interface component, for example `hpc ppp0 Download Speed`.
+Because the interface component is included in Home Assistant unique IDs,
+changing `--dev` changes the entities.
 
 If `MQTT_TOPIC` is set, publishers use it as the state topic and discovery config
 points to that exact topic.
@@ -413,10 +660,15 @@ python3 -m py_compile src/homelab_ha_discovery/collectors/nvme_smart.py
 python3 -m py_compile src/homelab_ha_discovery/scripts/publish_nvme_metrics.py
 python3 -m py_compile src/homelab_ha_discovery/collectors/network_linux.py
 python3 -m py_compile src/homelab_ha_discovery/scripts/publish_network_metrics.py
+python3 -m py_compile src/homelab_ha_discovery/collectors/router_asus_ssh.py
+python3 -m py_compile src/homelab_ha_discovery/scripts/publish_asus_router_cpu_metrics.py
+python3 -m py_compile src/homelab_ha_discovery/scripts/publish_asus_router_network_metrics.py
+python3 -m py_compile src/homelab_ha_discovery/scripts/publish_asus_router_connected_clients_metrics.py
 python3 -m py_compile src/homelab_ha_discovery/scripts/install_debian_host_systemd.py
+python3 -m unittest discover -s tests
 ```
 
-Run `pytest` if tests are present.
+Run `pytest` too if it is available.
 
 ## License
 

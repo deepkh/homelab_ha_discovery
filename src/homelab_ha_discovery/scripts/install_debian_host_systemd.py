@@ -30,6 +30,9 @@ DEFAULT_TIMERS = {
     "disk_smart": 60.0,
     "nvme_smart": 60.0,
     "network": 1.0,
+    "asus_router_cpu": 1.0,
+    "asus_router_connected_clients": 1.0,
+    "asus_router_network": 1.0,
 }
 DEFAULT_TIMER_PUBLISH_DISCOVERY_CONFIG = 60.0
 SCRIPT_BY_SERVICE_TYPE = {
@@ -38,6 +41,11 @@ SCRIPT_BY_SERVICE_TYPE = {
     "disk_smart": "publish_sdx_metrics.py",
     "nvme_smart": "publish_nvme_metrics.py",
     "network": "publish_network_metrics.py",
+    "asus_router_cpu": "publish_asus_router_cpu_metrics.py",
+    "asus_router_connected_clients": (
+        "publish_asus_router_connected_clients_metrics.py"
+    ),
+    "asus_router_network": "publish_asus_router_network_metrics.py",
 }
 DEBIAN_PACKAGES = (
     "python3",
@@ -406,6 +414,40 @@ def build_detected_config(device: str) -> dict[str, Any]:
             )
         )
     services.extend(detect_network_interfaces())
+    services.append(
+        service_entry(
+            "asus_router_cpu",
+            False,
+            router_name="ASUS AX86U",
+            ssh_user="<user>",
+            ssh_ip="<ip-addr>",
+            ssh_port=22,
+            note="disabled template; edit SSH settings and enable manually",
+        )
+    )
+    services.append(
+        service_entry(
+            "asus_router_connected_clients",
+            False,
+            router_name="ASUS AX86U",
+            ssh_user="<user>",
+            ssh_ip="<ip-addr>",
+            ssh_port=22,
+            note="disabled template; edit SSH settings and enable manually",
+        )
+    )
+    services.append(
+        service_entry(
+            "asus_router_network",
+            False,
+            router_name="ASUS AX86U",
+            dev="eth0",
+            ssh_user="<user>",
+            ssh_ip="<ip-addr>",
+            ssh_port=22,
+            note="disabled template; edit SSH settings and enable manually",
+        )
+    )
 
     return {
         "schema_version": SCHEMA_VERSION,
@@ -481,6 +523,20 @@ def require_positive_seconds(value: object, name: str) -> float:
     return timer
 
 
+def require_ssh_port(value: object) -> int:
+    if value is None:
+        return 22
+    try:
+        port = int(value)
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError("ssh_port must be an integer") from exc
+    if isinstance(value, float) and not value.is_integer():
+        raise RuntimeError("ssh_port must be an integer")
+    if port <= 0 or port > 65535:
+        raise RuntimeError("ssh_port must be between 1 and 65535")
+    return port
+
+
 def discovery_timer_for_service(
     config: dict[str, Any],
     service: dict[str, Any],
@@ -526,6 +582,13 @@ def service_component(service: dict[str, Any]) -> str:
         return Path(require_string(service.get("dev"), f"{service_type} dev")).name
     if service_type == "network":
         return require_string(service.get("dev"), "network dev")
+    if service_type == "asus_router_network":
+        return (
+            f"{require_string(service.get('router_name'), 'router_name')} "
+            f"{require_string(service.get('dev'), 'asus_router_network dev')}"
+        )
+    if service_type in {"asus_router_cpu", "asus_router_connected_clients"}:
+        return require_string(service.get("router_name"), "router_name")
     raise RuntimeError(f"unsupported service type: {service_type}")
 
 
@@ -543,6 +606,12 @@ def service_unit_name(device: str, service: dict[str, Any]) -> str:
         suffix = f"nvme-{component}"
     elif service_type == "network":
         suffix = f"network-{component}"
+    elif service_type == "asus_router_cpu":
+        suffix = f"asus-router-cpu-{component}"
+    elif service_type == "asus_router_connected_clients":
+        suffix = f"asus-router-connected-clients-{component}"
+    elif service_type == "asus_router_network":
+        suffix = f"asus-router-network-{component}"
     else:
         raise RuntimeError(f"unsupported service type: {service_type}")
     return f"{SERVICE_PREFIX}-{device_part}-{suffix}.service"
@@ -561,6 +630,18 @@ def service_description(device: str, service: dict[str, Any]) -> str:
         return f"Homelab HA Discovery NVMe SMART metrics for {device} {component}"
     if service_type == "network":
         return f"Homelab HA Discovery network metrics for {device} {component}"
+    if service_type == "asus_router_cpu":
+        return f"Homelab HA Discovery ASUS router CPU metrics for {device} {component}"
+    if service_type == "asus_router_connected_clients":
+        return (
+            "Homelab HA Discovery ASUS router connected-client metrics "
+            f"for {device} {component}"
+        )
+    if service_type == "asus_router_network":
+        return (
+            "Homelab HA Discovery ASUS router network metrics "
+            f"for {device} {component}"
+        )
     raise RuntimeError(f"unsupported service type: {service_type}")
 
 
@@ -586,6 +667,71 @@ def service_command(
         command.extend(["--gpu", str(service["gpu_index"])])
     if service_type in {"disk_smart", "nvme_smart", "network"}:
         command.extend(["--dev", require_string(service.get("dev"), "dev")])
+    if service_type == "asus_router_network":
+        command.extend(
+            [
+                "--router-name",
+                require_string(service.get("router_name"), "router_name"),
+                "--dev",
+                require_string(service.get("dev"), "dev"),
+                "--ssh-user",
+                require_string(service.get("ssh_user"), "ssh_user"),
+                "--ssh-ip",
+                require_string(service.get("ssh_ip"), "ssh_ip"),
+                "--ssh-port",
+                str(require_ssh_port(service.get("ssh_port"))),
+            ]
+        )
+    if service_type in {"asus_router_cpu", "asus_router_connected_clients"}:
+        command.extend(
+            [
+                "--router-name",
+                require_string(service.get("router_name"), "router_name"),
+                "--ssh-user",
+                require_string(service.get("ssh_user"), "ssh_user"),
+                "--ssh-ip",
+                require_string(service.get("ssh_ip"), "ssh_ip"),
+                "--ssh-port",
+                str(require_ssh_port(service.get("ssh_port"))),
+            ]
+        )
+    if service_type == "asus_router_connected_clients":
+        if service.get("client_list_command") is not None:
+            command.extend(
+                [
+                    "--client-list-command",
+                    require_string(
+                        service.get("client_list_command"),
+                        "client_list_command",
+                    ),
+                ]
+            )
+    if service_type == "asus_router_cpu":
+        if service.get("top_command") is not None:
+            command.extend(
+                [
+                    "--top-command",
+                    require_string(service.get("top_command"), "top_command"),
+                ]
+            )
+        if service.get("temperature_command") is not None:
+            command.extend(
+                [
+                    "--temperature-command",
+                    require_string(
+                        service.get("temperature_command"),
+                        "temperature_command",
+                    ),
+                ]
+            )
+    if service_type == "asus_router_network":
+        if service.get("network_command") is not None:
+            command.extend(
+                [
+                    "--network-command",
+                    require_string(service.get("network_command"), "network_command"),
+                ]
+            )
     command.extend(["--timer", str(timer)])
 
     if discovery_timer is not None:
@@ -678,6 +824,108 @@ def write_units(paths: RuntimePaths, units: list[UnitSpec], dry_run: bool) -> No
         print(f"Wrote systemd unit: {unit_path}")
 
 
+def existing_generated_unit_paths(systemd_dir: Path) -> list[Path]:
+    if not systemd_dir.exists():
+        return []
+    return sorted(systemd_dir.glob(f"{SERVICE_PREFIX}-*.service"))
+
+
+def unit_names(units: list[UnitSpec]) -> list[str]:
+    return [unit.name for unit in units]
+
+
+def unit_names_from_paths(unit_paths: list[Path]) -> list[str]:
+    return [unit_path.name for unit_path in unit_paths]
+
+
+def load_configured_units(paths: RuntimePaths) -> list[UnitSpec]:
+    units = build_unit_specs(paths, load_config(paths))
+    if not units:
+        raise RuntimeError("no enabled services found in config")
+    return units
+
+
+def require_installed_unit_files(
+    paths: RuntimePaths,
+    units: list[UnitSpec],
+    dry_run: bool,
+) -> None:
+    missing_units = [
+        unit.name
+        for unit in units
+        if not unit.path(paths.systemd_dir).exists()
+    ]
+    if missing_units and not dry_run:
+        raise RuntimeError(
+            "systemd unit file(s) missing; run install first: "
+            + ", ".join(missing_units)
+        )
+
+
+def remove_existing_generated_units(
+    unit_paths: list[Path],
+    dry_run: bool,
+) -> None:
+    for unit_path in unit_paths:
+        if dry_run:
+            print(f"DRY RUN: would remove existing systemd unit {unit_path}")
+            continue
+        unit_path.unlink()
+        print(f"Removed existing systemd unit: {unit_path}")
+
+
+def prompt_remove_existing_generated_units(unit_paths: list[Path]) -> bool:
+    print("Existing homelab-ha-discovery systemd unit file(s) found:")
+    for unit_path in unit_paths:
+        print(f"  {unit_path}")
+    answer = input(
+        "Remove all existing homelab-ha-discovery-*.service files before "
+        "writing regenerated units? [y/N] "
+    )
+    return answer.strip().lower() in {"y", "yes"}
+
+
+def maybe_remove_existing_generated_units(
+    paths: RuntimePaths,
+    clean_existing_units: bool,
+    no_clean_existing_units: bool,
+    dry_run: bool,
+) -> None:
+    unit_paths = existing_generated_unit_paths(paths.systemd_dir)
+    if not unit_paths:
+        return
+
+    if clean_existing_units:
+        remove_existing_generated_units(unit_paths, dry_run)
+        return
+
+    if no_clean_existing_units:
+        print("Keeping existing homelab-ha-discovery systemd unit files.")
+        return
+
+    if dry_run:
+        print(
+            "DRY RUN: would prompt to remove existing "
+            f"{paths.systemd_dir}/{SERVICE_PREFIX}-*.service files"
+        )
+        for unit_path in unit_paths:
+            print(f"  {unit_path}")
+        return
+
+    if not sys.stdin.isatty():
+        print(
+            "Existing homelab-ha-discovery systemd unit files were kept because "
+            "stdin is not interactive. Pass --clean-existing-units to remove them.",
+            file=sys.stderr,
+        )
+        return
+
+    if prompt_remove_existing_generated_units(unit_paths):
+        remove_existing_generated_units(unit_paths, dry_run=False)
+    else:
+        print("Keeping existing homelab-ha-discovery systemd unit files.")
+
+
 def command_bootstrap(args: argparse.Namespace) -> int:
     paths = build_paths(args)
     try:
@@ -721,6 +969,12 @@ def command_install(args: argparse.Namespace) -> int:
     paths = build_paths(args)
     try:
         units = build_unit_specs(paths, load_config(paths))
+        maybe_remove_existing_generated_units(
+            paths,
+            args.clean_existing_units,
+            args.no_clean_existing_units,
+            args.dry_run,
+        )
         write_units(paths, units, args.dry_run)
         run_command(["systemctl", "daemon-reload"], args.dry_run)
     except (OSError, RuntimeError, subprocess.CalledProcessError) as exc:
@@ -737,25 +991,97 @@ def command_enable(args: argparse.Namespace) -> int:
                 f"{paths.mqtt_env_path} is missing; create it before enabling "
                 "services or pass --allow-missing-mqtt-env"
             )
-        units = build_unit_specs(paths, load_config(paths))
-        if not units:
-            raise RuntimeError("no enabled services found in config")
-        missing_units = [
-            unit.name
-            for unit in units
-            if not unit.path(paths.systemd_dir).exists()
-        ]
-        if missing_units and not args.dry_run:
-            raise RuntimeError(
-                "systemd unit file(s) missing; run install first: "
-                + ", ".join(missing_units)
-            )
+        units = load_configured_units(paths)
+        require_installed_unit_files(paths, units, args.dry_run)
 
         run_command(["systemctl", "daemon-reload"], args.dry_run)
         command = ["systemctl", "enable"]
         if args.now:
             command.append("--now")
-        command.extend(unit.name for unit in units)
+        command.extend(unit_names(units))
+        run_command(command, args.dry_run)
+    except (OSError, RuntimeError, subprocess.CalledProcessError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def command_stop(args: argparse.Namespace) -> int:
+    paths = build_paths(args)
+    try:
+        units = load_configured_units(paths)
+        require_installed_unit_files(paths, units, args.dry_run)
+        run_command(["systemctl", "stop", *unit_names(units)], args.dry_run)
+    except (OSError, RuntimeError, subprocess.CalledProcessError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def command_restart(args: argparse.Namespace) -> int:
+    paths = build_paths(args)
+    try:
+        units = load_configured_units(paths)
+        require_installed_unit_files(paths, units, args.dry_run)
+        run_command(["systemctl", "daemon-reload"], args.dry_run)
+        run_command(["systemctl", "restart", *unit_names(units)], args.dry_run)
+    except (OSError, RuntimeError, subprocess.CalledProcessError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def command_disable(args: argparse.Namespace) -> int:
+    paths = build_paths(args)
+    try:
+        units = load_configured_units(paths)
+        require_installed_unit_files(paths, units, args.dry_run)
+        command = ["systemctl", "disable"]
+        if args.now:
+            command.append("--now")
+        command.extend(unit_names(units))
+        run_command(command, args.dry_run)
+    except (OSError, RuntimeError, subprocess.CalledProcessError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def command_uninstall(args: argparse.Namespace) -> int:
+    paths = build_paths(args)
+    try:
+        unit_paths = existing_generated_unit_paths(paths.systemd_dir)
+        if not unit_paths:
+            print(
+                "No generated homelab-ha-discovery systemd unit files found in "
+                f"{paths.systemd_dir}"
+            )
+            return 0
+
+        names = unit_names_from_paths(unit_paths)
+        run_command(["systemctl", "stop", *names], args.dry_run)
+        run_command(["systemctl", "disable", *names], args.dry_run)
+        remove_existing_generated_units(unit_paths, args.dry_run)
+        run_command(["systemctl", "daemon-reload"], args.dry_run)
+    except (OSError, RuntimeError, subprocess.CalledProcessError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def command_logs(args: argparse.Namespace) -> int:
+    paths = build_paths(args)
+    try:
+        units = load_configured_units(paths)
+        command = ["journalctl"]
+        if args.follow:
+            command.append("-f")
+        if args.lines is not None:
+            command.extend(["-n", str(args.lines)])
+        if args.since is not None:
+            command.extend(["--since", args.since])
+        for unit_name in unit_names(units):
+            command.extend(["-u", unit_name])
         run_command(command, args.dry_run)
     except (OSError, RuntimeError, subprocess.CalledProcessError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
@@ -775,17 +1101,31 @@ def command_status(args: argparse.Namespace) -> int:
         print(f"No enabled services in {paths.config_path}")
         return 0
 
-    unit_names = [unit.name for unit in units]
+    configured_unit_names = [unit.name for unit in units]
     print(f"Config: {paths.config_path}")
     print("Generated unit names:")
-    for unit_name in unit_names:
+    for unit_name in configured_unit_names:
         print(f"  {unit_name}")
     print("Useful commands:")
-    print("  systemctl status " + " ".join(shlex.quote(name) for name in unit_names))
-    journal_units = " ".join(f"-u {shlex.quote(name)}" for name in unit_names)
-    print("  journalctl -f " + journal_units)
-    print("  systemctl restart " + " ".join(shlex.quote(name) for name in unit_names))
+    quoted_units = " ".join(shlex.quote(name) for name in configured_unit_names)
+    script_path = shlex.quote(str(Path(__file__).resolve()))
+    print("  systemctl status " + quoted_units)
+    print(f"  sudo python3 {script_path} logs --follow")
+    print(f"  sudo python3 {script_path} restart")
+    print(f"  sudo python3 {script_path} stop")
+    print(f"  sudo python3 {script_path} disable --now")
+    print(f"  sudo python3 {script_path} uninstall")
     return 0
+
+
+def positive_int(value: str) -> int:
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("must be an integer") from exc
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError("must be greater than 0")
+    return parsed
 
 
 def add_common_options(parser: argparse.ArgumentParser) -> None:
@@ -869,6 +1209,20 @@ def build_parser() -> argparse.ArgumentParser:
         help="Generate systemd service files from host-metrics.json.",
     )
     add_common_options(install_parser)
+    install_cleanup_group = install_parser.add_mutually_exclusive_group()
+    install_cleanup_group.add_argument(
+        "--clean-existing-units",
+        action="store_true",
+        help=(
+            "Remove existing homelab-ha-discovery-*.service files before "
+            "writing regenerated units."
+        ),
+    )
+    install_cleanup_group.add_argument(
+        "--no-clean-existing-units",
+        action="store_true",
+        help="Keep existing homelab-ha-discovery-*.service files without prompting.",
+    )
     install_parser.set_defaults(func=command_install)
 
     enable_parser = subparsers.add_parser(
@@ -888,9 +1242,63 @@ def build_parser() -> argparse.ArgumentParser:
     )
     enable_parser.set_defaults(func=command_enable)
 
+    stop_parser = subparsers.add_parser(
+        "stop",
+        help="Stop generated systemd services.",
+    )
+    add_common_options(stop_parser)
+    stop_parser.set_defaults(func=command_stop)
+
+    restart_parser = subparsers.add_parser(
+        "restart",
+        help="Restart generated systemd services.",
+    )
+    add_common_options(restart_parser)
+    restart_parser.set_defaults(func=command_restart)
+
+    disable_parser = subparsers.add_parser(
+        "disable",
+        help="Disable generated systemd services.",
+    )
+    add_common_options(disable_parser)
+    disable_parser.add_argument(
+        "--now",
+        action="store_true",
+        help="Stop the generated services immediately after disabling them.",
+    )
+    disable_parser.set_defaults(func=command_disable)
+
+    uninstall_parser = subparsers.add_parser(
+        "uninstall",
+        help="Stop, disable, and remove generated systemd service files.",
+    )
+    add_common_options(uninstall_parser)
+    uninstall_parser.set_defaults(func=command_uninstall)
+
+    logs_parser = subparsers.add_parser(
+        "logs",
+        help="Show journal logs for generated systemd services.",
+    )
+    add_common_options(logs_parser)
+    logs_parser.add_argument(
+        "--follow",
+        action="store_true",
+        help="Follow logs.",
+    )
+    logs_parser.add_argument(
+        "--lines",
+        type=positive_int,
+        help="Show the most recent N journal lines.",
+    )
+    logs_parser.add_argument(
+        "--since",
+        help='Show logs since a journalctl time expression, such as "1 hour ago".',
+    )
+    logs_parser.set_defaults(func=command_logs)
+
     status_parser = subparsers.add_parser(
         "status",
-        help="Print generated unit names and useful systemctl commands.",
+        help="Print generated unit names and useful service commands.",
     )
     add_common_options(status_parser)
     status_parser.set_defaults(func=command_status)

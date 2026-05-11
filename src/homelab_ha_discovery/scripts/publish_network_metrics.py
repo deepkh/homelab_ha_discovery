@@ -76,13 +76,13 @@ def publish_network_discovery(device: str, component: str, state_topic: str) -> 
         (
             network_metric_identity(device, component, "download_speed", state_topic),
             f"{device} {component} Download Speed",
-            "KB/s",
+            "Mbps",
             "{{ value_json['Download Speed'] }}",
         ),
         (
             network_metric_identity(device, component, "upload_speed", state_topic),
             f"{device} {component} Upload Speed",
-            "KB/s",
+            "Mbps",
             "{{ value_json['Upload Speed'] }}",
         ),
     )

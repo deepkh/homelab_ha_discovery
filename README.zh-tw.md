@@ -10,7 +10,7 @@
 
 用於 homelab 指標的 Python MQTT 發布器，支援 Home Assistant MQTT discovery。
 
-目前可執行的發布器會從本機 Debian 主機收集指標，並將 JSON payload 發布到 MQTT。一般執行會先發布保留的 Home Assistant discovery config，然後發布目前的指標狀態。外部 systemd timer 執行可在 discovery 已註冊後使用 `--publisher-only`。也可以使用 `--timer SECONDS` 進入長時間執行的服務模式。
+目前可執行的發布器會從本機 Debian 主機以及透過 SSH 從 ASUS routers 收集指標，並將 JSON payload 發布到 MQTT。一般執行會先發布保留的 Home Assistant discovery config，然後發布目前的指標狀態。外部 systemd timer 執行可在 discovery 已註冊後使用 `--publisher-only`。也可以使用 `--timer SECONDS` 進入長時間執行的服務模式。
 
 AI agent 和 repository 維護規則請見 [AGENTS.md](AGENTS.md)。
 
@@ -21,6 +21,7 @@ AI agent 和 repository 維護規則請見 [AGENTS.md](AGENTS.md)。
 - 用於 CPU 指標發布的 `top` 和 `sensors`。在 Debian 上，`sensors` 由 `lm-sensors` 提供。
 - 用於 NVIDIA GPU 發布的 `nvidia-smi`
 - 用於磁碟與 NVMe SMART 發布的 `smartctl`。在 Debian 上，`smartctl` 由 `smartmontools` 提供。
+- ASUS router 發布需要 `ssh` client 存取權限
 - MQTT broker 存取權限
 
 ## 安裝設定
@@ -102,6 +103,24 @@ sudo python3 src/homelab_ha_discovery/scripts/install_debian_host_systemd.py boo
 `/etc/homelab-ha-discovery/host-metrics.json`。複製時會排除 `.git`、`.venv`、
 caches 與本機 session artifacts。
 
+`--force-copy` 只會取代已安裝的 app 目錄。如果
+`/etc/homelab-ha-discovery/host-metrics.json` 已存在，`bootstrap` 會保留它；
+除非同時傳入 `--force-config`：
+
+```bash
+sudo python3 src/homelab_ha_discovery/scripts/install_debian_host_systemd.py bootstrap --ha-device-id hpc --force-copy --force-config
+```
+
+若只要重新產生 `host-metrics.json`，不複製 app、不重建 virtual environment，
+請執行 detect 並加上 `--force`：
+
+```bash
+sudo python3 src/homelab_ha_discovery/scripts/install_debian_host_systemd.py detect --ha-device-id hpc --force
+```
+
+`--force-config` 和 `detect --force` 都會取代整個產生的 config，所以請先保留任何
+手動修改。
+
 Debian package 安裝必須明確選用：
 
 ```bash
@@ -121,19 +140,94 @@ sudo editor /etc/homelab-ha-discovery/host-metrics.json
 ```bash
 sudo python3 /opt/homelab-ha-discovery/src/homelab_ha_discovery/scripts/install_debian_host_systemd.py install
 sudo python3 /opt/homelab-ha-discovery/src/homelab_ha_discovery/scripts/install_debian_host_systemd.py enable --now
+sudo python3 /opt/homelab-ha-discovery/src/homelab_ha_discovery/scripts/install_debian_host_systemd.py logs --follow
 python3 /opt/homelab-ha-discovery/src/homelab_ha_discovery/scripts/install_debian_host_systemd.py status
 ```
+
+執行 `install` 時，如果已存在
+`/etc/systemd/system/homelab-ha-discovery-*.service` 檔案且 stdin 是互動式，
+安裝器會先詢問是否移除。回答 yes 會先移除這些產生的 unit files，再依照目前的
+`host-metrics.json` 寫入 units；回答 no 則保留它們。若是 scripted runs，可傳入
+`--clean-existing-units` 不詢問直接移除，或傳入 `--no-clean-existing-units`
+不詢問直接保留。這個 cleanup 只會移除符合名稱的 unit files；不會停止 services，
+也不會修改 `host-metrics.json`。
+
+units 安裝完成後，安裝器也可以管理產生的 services：
+
+```bash
+sudo python3 /opt/homelab-ha-discovery/src/homelab_ha_discovery/scripts/install_debian_host_systemd.py logs
+sudo python3 /opt/homelab-ha-discovery/src/homelab_ha_discovery/scripts/install_debian_host_systemd.py logs --follow --lines 200 --since "1 hour ago"
+sudo python3 /opt/homelab-ha-discovery/src/homelab_ha_discovery/scripts/install_debian_host_systemd.py restart
+sudo python3 /opt/homelab-ha-discovery/src/homelab_ha_discovery/scripts/install_debian_host_systemd.py stop
+sudo python3 /opt/homelab-ha-discovery/src/homelab_ha_discovery/scripts/install_debian_host_systemd.py disable --now
+sudo python3 /opt/homelab-ha-discovery/src/homelab_ha_discovery/scripts/install_debian_host_systemd.py uninstall
+```
+
+`logs` 會讀取產生 units 的 journal。`restart`、`stop` 與 `disable` 會操作目前
+`host-metrics.json` 描述的 units；`disable --now` 也會停止它們。`uninstall`
+會掃描符合名稱的產生 unit files、停止並停用這些 units、只移除產生的
+`homelab-ha-discovery-*.service` files，然後重新載入 systemd。它會保留 app
+目錄、`host-metrics.json`、`mqtt.env`、MQTT retained discovery config，以及
+Home Assistant entities。
 
 產生的 units 會使用 `EnvironmentFile=-/etc/homelab-ha-discovery/mqtt.env`，但
 當真正的 env 檔不存在時，`enable --now` 會拒絕 enable/start services，除非傳入
 `--allow-missing-mqtt-env`。這些 units 會以長時間執行的 `--timer` 模式執行現有
 publishers。預設 interval 為 CPU 和 GPU `5.0` 秒、磁碟和 NVMe SMART `60.0`
-秒、network `1.0` 秒。
+秒、network `1.0` 秒、ASUS router CPU `1.0` 秒、ASUS router network
+`1.0` 秒，以及 ASUS router connected clients `1.0` 秒。
 產生的 `host-metrics.json` 也會包含 top-level
 `timer_publish_discovery_config`，預設值為 `60.0`，因此產生的 services 會每
 60 秒重新發布保留的 Home Assistant discovery config。將它設為 `null` 可全域
 停用；也可以在個別 service entry 加入 `timer_publish_discovery_config` 來覆寫該
 service 的設定。
+
+Detect/bootstrap 也會加入停用狀態的 ASUS router template entries，且不會透過
+SSH probe router：
+
+```json
+[
+  {
+    "type": "asus_router_cpu",
+    "enabled": false,
+    "timer": 1.0,
+    "router_name": "ASUS AX86U",
+    "ssh_user": "router-user",
+    "ssh_ip": "router-ip-address",
+    "ssh_port": 22,
+    "note": "disabled template; edit SSH settings and enable manually"
+  },
+  {
+    "type": "asus_router_connected_clients",
+    "enabled": false,
+    "timer": 1.0,
+    "router_name": "ASUS AX86U",
+    "ssh_user": "router-user",
+    "ssh_ip": "router-ip-address",
+    "ssh_port": 22,
+    "note": "disabled template; edit SSH settings and enable manually"
+  },
+  {
+    "type": "asus_router_network",
+    "enabled": false,
+    "timer": 1.0,
+    "router_name": "ASUS AX86U",
+    "dev": "eth0",
+    "ssh_user": "router-user",
+    "ssh_ip": "router-ip-address",
+    "ssh_port": 22,
+    "note": "disabled template; edit SSH settings and enable manually"
+  }
+]
+```
+
+請在啟用前編輯這些 entries。若要監控多台 routers，可新增更多 ASUS router
+entries；請保持每個 `router_name` 穩定，因為它會用於產生的 service 名稱、
+MQTT topics 和 Home Assistant unique IDs。Connected-client entries 可加入
+`client_list_command` 來覆寫預設的遠端 command。Router network entries 會用
+`router_name` 和 `dev` 的組合產生 unit 名稱，因此同一台 router 的多個
+interfaces 會保持分離。Router network entries 可加入 `network_command` 來覆寫
+預設的遠端 `/proc/net/dev` sampler。
 
 安裝器不會設定 sudoers。磁碟與 NVMe SMART publishers 會執行
 `sudo smartctl -a <dev>`，因此如果這些 services 不會以 root 執行，請為 service
@@ -201,8 +295,69 @@ python3 src/homelab_ha_discovery/scripts/publish_network_metrics.py --ha-device-
 
 Network 發布器會在本機使用 `psutil.net_io_counters(pernic=True)`。`--dev`
 必須符合 network interface key，例如 `ppp0`。未使用 `--timer` 時，它會間隔
-一秒取得兩次樣本，並發布一次計算出的 throughput state。速度會以 `KB/s`
-發布，其中 `KB` 代表 1024 bytes，數值會四捨五入到小數點後兩位。
+一秒取得兩次樣本，並發布一次計算出的 throughput state。速度會以 `Mbps`
+發布，其中 `Mbps` 代表每秒 megabits，並以 1,000,000 bits per second 計算。
+數值會四捨五入到小數點後三位；`0.001` 代表 1 Kbps，`1.000` 代表 1 Mbps。
+
+ASUS router CPU 指標：
+
+```bash
+python3 src/homelab_ha_discovery/scripts/publish_asus_router_cpu_metrics.py --ha-device-id hpc --router-name "ASUS AX86U" --ssh-user router-user --ssh-ip router-ip-address
+```
+
+ASUS router CPU 發布器會透過 SSH 在遠端執行 `top -bn1` 和
+`cat /sys/class/thermal/thermal_zone*/temp`。`--ssh-port` 預設為 `22`。
+`--ha-device-id` 仍是 Home Assistant/MQTT device identity；`--router-name`
+會被 normalize 成 router component，例如 `ASUS AX86U` 會變成
+`asus_ax86u`。溫度輸出會被視為 millidegrees Celsius，並發布最高的有效
+thermal zone 數值。每個遠端 SSH command 都有 10 秒 timeout。如果 router
+需要不同 commands，可用 `--top-command` 或 `--temperature-command` 覆寫；
+產生的 systemd config entry 也可以加入 `top_command` 和
+`temperature_command`。
+
+ASUS router network 指標：
+
+```bash
+python3 src/homelab_ha_discovery/scripts/publish_asus_router_network_metrics.py --ha-device-id hpc --router-name "ASUS AX86U" --dev eth0 --ssh-user router-user --ssh-ip router-ip-address --ssh-port 22
+```
+
+ASUS router network 發布器會為 `--dev` 產生遠端 `/proc/net/dev` sampler，透過
+SSH 間隔一秒讀取兩次 RX/TX bytes，確認 counters 存在且未遞減，並以 `Mbps`
+發布下載/上傳速度。`--ssh-port` 預設為 `22`。`--ha-device-id` 仍是 Home
+Assistant/MQTT device identity；`--router-name` 會被 normalize 成 router
+component，例如 `ASUS AX86U` 會變成 `asus_ax86u`；`--dev` 是 router interface
+component，例如 `eth0`。如果 router 需要不同 command，可用
+`--network-command` 覆寫；產生的 systemd config entry 也可以加入
+`network_command`。
+
+ASUS router connected-client 指標：
+
+```bash
+python3 src/homelab_ha_discovery/scripts/publish_asus_router_connected_clients_metrics.py --ha-device-id hpc --router-name "ASUS AX86U" --ssh-user router-user --ssh-ip router-ip-address --ssh-port 22
+```
+
+ASUS router connected-client 發布器會透過 SSH 在遠端執行
+`cat /var/lib/misc/dnsmasq.leases; echo "---END_LEASES---"; cat /tmp/clientlist.json`。
+它會遞迴走訪巢狀的 `clientlist.json` objects，所以像 top-level AP MAC wrapper 也可
+以處理。它會發布 ASUS interface sections（例如 `2G`、`5G` 和 `wired_mac`）底下
+找到的每個 MAC；只存在於 DHCP leases、但不存在於 `clientlist.json` 的 rows 不會
+被納入。MAC addresses 會 normalize 成大寫。DHCP hostnames 會先依 MAC 比對，再
+以 IP fallback。缺少 DHCP hostname 時會發布 `" - "`，缺少 RSSI（例如 wired
+clients）時會發布 `"N/A"`。如果 router 需要不同 command，可用
+`--client-list-command` 覆寫；產生的 systemd config entry 也可以加入
+`client_list_command`。
+
+若要手動 troubleshooting，請加入 `--debug`，它會將進度訊息印到 stderr。
+對 connected-client runs，debug output 也會包含 raw SSH output（會放在
+begin/end markers 之間）、dnsmasq lease counts、`clientlist.json`
+top-level keys、matched interface sections、MAC counts，以及 sample extracted
+clients：
+
+```bash
+sudo /opt/homelab-ha-discovery/.venv/bin/python /opt/homelab-ha-discovery/src/homelab_ha_discovery/scripts/publish_asus_router_cpu_metrics.py --ha-device-id hpc --router-name "ASUS AX86U" --ssh-user router-user --ssh-ip router-ip-address --ssh-port 22 --timer 1.0 --timer-publish-discovery-config 60.0 --debug
+sudo /opt/homelab-ha-discovery/.venv/bin/python /opt/homelab-ha-discovery/src/homelab_ha_discovery/scripts/publish_asus_router_network_metrics.py --ha-device-id hpc --router-name "ASUS AX86U" --dev eth0 --ssh-user router-user --ssh-ip router-ip-address --ssh-port 22 --timer 1.0 --timer-publish-discovery-config 60.0 --debug
+sudo /opt/homelab-ha-discovery/.venv/bin/python /opt/homelab-ha-discovery/src/homelab_ha_discovery/scripts/publish_asus_router_connected_clients_metrics.py --ha-device-id hpc --router-name "ASUS AX86U" --ssh-user router-user --ssh-ip router-ip-address --ssh-port 22 --timer 1.0 --timer-publish-discovery-config 60.0 --debug
+```
 
 若要頻繁透過 systemd timer 執行，請在一般執行已註冊 discovery config 後使用 `--publisher-only`：
 
@@ -212,9 +367,12 @@ python3 src/homelab_ha_discovery/scripts/publish_gpu_metrics.py --ha-device-id h
 python3 src/homelab_ha_discovery/scripts/publish_sdx_metrics.py --ha-device-id hpc --dev /dev/sda --publisher-only
 python3 src/homelab_ha_discovery/scripts/publish_nvme_metrics.py --ha-device-id hpc --dev /dev/nvme0 --publisher-only
 python3 src/homelab_ha_discovery/scripts/publish_network_metrics.py --ha-device-id hpc --dev ppp0 --publisher-only
+python3 src/homelab_ha_discovery/scripts/publish_asus_router_cpu_metrics.py --ha-device-id hpc --router-name "ASUS AX86U" --ssh-user router-user --ssh-ip router-ip-address --publisher-only
+python3 src/homelab_ha_discovery/scripts/publish_asus_router_network_metrics.py --ha-device-id hpc --router-name "ASUS AX86U" --dev eth0 --ssh-user router-user --ssh-ip router-ip-address --publisher-only
+python3 src/homelab_ha_discovery/scripts/publish_asus_router_connected_clients_metrics.py --ha-device-id hpc --router-name "ASUS AX86U" --ssh-user router-user --ssh-ip router-ip-address --publisher-only
 ```
 
-若要使用長時間執行的服務模式，請使用 `--timer SECONDS`。大多數發布器會立即發布第一次指標，之後腳本會在每次發布嘗試之間休眠。Network 指標會先建立 baseline，等待一個 interval 後，才發布第一次計算出的速度：
+若要使用長時間執行的服務模式，請使用 `--timer SECONDS`。大多數發布器會立即發布第一次指標，之後腳本會在每次發布嘗試之間休眠。本機 network 指標會先建立 baseline，等待一個 interval 後，才發布第一次計算出的速度。ASUS router network 指標會在每次發布嘗試期間執行一秒遠端 sample：
 
 ```bash
 python3 src/homelab_ha_discovery/scripts/publish_cpu_metrics.py --ha-device-id hpc --timer 5.0
@@ -222,9 +380,12 @@ python3 src/homelab_ha_discovery/scripts/publish_gpu_metrics.py --ha-device-id h
 python3 src/homelab_ha_discovery/scripts/publish_sdx_metrics.py --ha-device-id hpc --dev /dev/sda --timer 5.0
 python3 src/homelab_ha_discovery/scripts/publish_nvme_metrics.py --ha-device-id hpc --dev /dev/nvme0 --timer 5.0
 python3 src/homelab_ha_discovery/scripts/publish_network_metrics.py --ha-device-id hpc --dev ppp0 --timer 1.0
+python3 src/homelab_ha_discovery/scripts/publish_asus_router_cpu_metrics.py --ha-device-id hpc --router-name "ASUS AX86U" --ssh-user router-user --ssh-ip router-ip-address --timer 1.0
+python3 src/homelab_ha_discovery/scripts/publish_asus_router_network_metrics.py --ha-device-id hpc --router-name "ASUS AX86U" --dev eth0 --ssh-user router-user --ssh-ip router-ip-address --timer 1.0
+python3 src/homelab_ha_discovery/scripts/publish_asus_router_connected_clients_metrics.py --ha-device-id hpc --router-name "ASUS AX86U" --ssh-user router-user --ssh-ip router-ip-address --timer 1.0
 ```
 
-未使用 `--publisher-only` 時，`--timer` 會在啟動時發布一次 discovery config，之後每個 interval 只發布 metric state。對 network 指標來說，啟動時的 discovery config 會在 baseline interval 後、第一次計算出的 metric state 之前發布。使用 `--timer --publisher-only` 時，每個 interval 只發布 metric state。
+未使用 `--publisher-only` 時，`--timer` 會在啟動時發布一次 discovery config，之後每個 interval 只發布 metric state。對本機 network 指標來說，啟動時的 discovery config 會在 baseline interval 後、第一次計算出的 metric state 之前發布。使用 `--timer --publisher-only` 時，每個 interval 只發布 metric state。
 
 若要在長時間執行的服務模式中定期重新發布保留的 discovery config，請加入 `--timer-publish-discovery-config SECONDS`：
 
@@ -234,6 +395,9 @@ python3 src/homelab_ha_discovery/scripts/publish_gpu_metrics.py --ha-device-id h
 python3 src/homelab_ha_discovery/scripts/publish_sdx_metrics.py --ha-device-id hpc --dev /dev/sda --timer 5.0 --timer-publish-discovery-config 60.0
 python3 src/homelab_ha_discovery/scripts/publish_nvme_metrics.py --ha-device-id hpc --dev /dev/nvme0 --timer 5.0 --timer-publish-discovery-config 60.0
 python3 src/homelab_ha_discovery/scripts/publish_network_metrics.py --ha-device-id hpc --dev ppp0 --timer 1.0 --timer-publish-discovery-config 60.0
+python3 src/homelab_ha_discovery/scripts/publish_asus_router_cpu_metrics.py --ha-device-id hpc --router-name "ASUS AX86U" --ssh-user router-user --ssh-ip router-ip-address --timer 1.0 --timer-publish-discovery-config 60.0
+python3 src/homelab_ha_discovery/scripts/publish_asus_router_network_metrics.py --ha-device-id hpc --router-name "ASUS AX86U" --dev eth0 --ssh-user router-user --ssh-ip router-ip-address --timer 1.0 --timer-publish-discovery-config 60.0
+python3 src/homelab_ha_discovery/scripts/publish_asus_router_connected_clients_metrics.py --ha-device-id hpc --router-name "ASUS AX86U" --ssh-user router-user --ssh-ip router-ip-address --timer 1.0 --timer-publish-discovery-config 60.0
 ```
 
 如果未設定 `--timer-publish-discovery-config`，timer 行為會維持只在啟動時發布一次 discovery。此選項需要 `--timer`，且不能與 `--publisher-only` 一起使用。
@@ -258,6 +422,78 @@ Discovery topics：
 homeassistant/sensor/homelab_ha_discovery_hpc_cpu_usage/config
 homeassistant/sensor/homelab_ha_discovery_hpc_cpu_temperature/config
 ```
+
+使用 `--ha-device-id hpc --router-name "ASUS AX86U"` 時，ASUS router CPU
+指標會將 state 發布到：
+
+```text
+homelab-ha-discovery/asus_ax86u/cpu/metrics/hpc
+```
+
+Payload：
+
+```json
+{"CPU Usages":37.8,"Temperature":54.0}
+```
+
+Discovery topics：
+
+```text
+homeassistant/sensor/homelab_ha_discovery_hpc_asus_ax86u_cpu_usage/config
+homeassistant/sensor/homelab_ha_discovery_hpc_asus_ax86u_cpu_temperature/config
+```
+
+Home Assistant sensor 名稱也會使用 router name，例如 `hpc ASUS AX86U CPU
+Usage`。因為 normalized router name 會包含在 Home Assistant unique IDs 中，
+變更 `--router-name` 會改變 entities。
+
+使用 `--ha-device-id hpc --router-name "ASUS AX86U" --dev eth0` 時，ASUS
+router network 指標會將 state 發布到：
+
+```text
+homelab-ha-discovery/asus_ax86u/eth0/metrics/hpc
+```
+
+Payload：
+
+```json
+{"Download Speed":0.001,"Upload Speed":1.0}
+```
+
+Discovery topics：
+
+```text
+homeassistant/sensor/homelab_ha_discovery_hpc_asus_ax86u_eth0_download_speed/config
+homeassistant/sensor/homelab_ha_discovery_hpc_asus_ax86u_eth0_upload_speed/config
+```
+
+Home Assistant sensor 名稱會包含 router name 和 interface，例如
+`hpc ASUS AX86U eth0 Download Speed`。因為 normalized router name 和 interface
+會包含在 Home Assistant unique IDs 中，變更 `--router-name` 或 `--dev` 都會改變
+entities。
+
+使用 `--ha-device-id hpc --router-name "ASUS AX86U"` 時，ASUS router
+connected-client 指標會將 state 發布到：
+
+```text
+homelab-ha-discovery/asus_ax86u/connected_clients/metrics/hpc
+```
+
+Payload：
+
+```json
+[{"mac":"8C:FD:49:49:7B:58","ip":"192.168.4.72","rssi":"-68","interface":"2G","name":"mushroom_02_pc0"}]
+```
+
+Discovery topic：
+
+```text
+homeassistant/sensor/homelab_ha_discovery_hpc_asus_ax86u_connected_clients/config
+```
+
+Home Assistant discovery 會建立一個 count sensor，例如 `hpc ASUS AX86U
+Connected Clients`；它的 value template 會用 `{{ value_json | count }}` 讀取
+array 長度。詳細的 client list 會保留在 MQTT state payload 中。
 
 使用 `--ha-device-id hpc` 時，未指定 `--gpu` 的 NVIDIA GPU 指標會將 state
 發布到：
@@ -361,7 +597,7 @@ homelab-ha-discovery/ppp0/metrics/hpc
 Payload：
 
 ```json
-{"Download Speed":123.45,"Upload Speed":67.89}
+{"Download Speed":0.001,"Upload Speed":1.0}
 ```
 
 Discovery topics：
@@ -371,10 +607,11 @@ homeassistant/sensor/homelab_ha_discovery_hpc_ppp0_download_speed/config
 homeassistant/sensor/homelab_ha_discovery_hpc_ppp0_upload_speed/config
 ```
 
-Network speed sensor 使用 `KB/s`，其中 `KB` 代表 1024 bytes。Home Assistant
-sensor 名稱也會使用 network interface component，例如 `hpc ppp0 Download
-Speed`。因為 interface component 會包含在 Home Assistant unique ID 中，變更
-`--dev` 會改變 entities。
+Network speed sensor 使用 `Mbps`，其中 `Mbps` 代表每秒 megabits，並以
+1,000,000 bits per second 計算。數值會四捨五入到小數點後三位；`0.001`
+代表 1 Kbps，`1.000` 代表 1 Mbps。Home Assistant sensor 名稱也會使用 network
+interface component，例如 `hpc ppp0 Download Speed`。因為 interface component
+會包含在 Home Assistant unique ID 中，變更 `--dev` 會改變 entities。
 
 如果設定了 `MQTT_TOPIC`，發布器會將它作為 state topic，且 discovery config
 會指向同一個 topic。
@@ -400,10 +637,15 @@ python3 -m py_compile src/homelab_ha_discovery/collectors/nvme_smart.py
 python3 -m py_compile src/homelab_ha_discovery/scripts/publish_nvme_metrics.py
 python3 -m py_compile src/homelab_ha_discovery/collectors/network_linux.py
 python3 -m py_compile src/homelab_ha_discovery/scripts/publish_network_metrics.py
+python3 -m py_compile src/homelab_ha_discovery/collectors/router_asus_ssh.py
+python3 -m py_compile src/homelab_ha_discovery/scripts/publish_asus_router_cpu_metrics.py
+python3 -m py_compile src/homelab_ha_discovery/scripts/publish_asus_router_network_metrics.py
+python3 -m py_compile src/homelab_ha_discovery/scripts/publish_asus_router_connected_clients_metrics.py
 python3 -m py_compile src/homelab_ha_discovery/scripts/install_debian_host_systemd.py
+python3 -m unittest discover -s tests
 ```
 
-如果有測試，請執行 `pytest`。
+如果可用，也請執行 `pytest`。
 
 ## 授權
 

@@ -10,7 +10,8 @@ import psutil
 
 
 NetworkMetrics = dict[str, float]
-BYTES_PER_KB = 1024.0
+BITS_PER_MEGABIT = 1000_000.0
+NETWORK_SPEED_DECIMAL_PLACES = 3
 
 
 @dataclass(frozen=True)
@@ -54,6 +55,12 @@ def calculate_network_speed_metrics(
         raise ValueError("network byte counters decreased unexpectedly")
 
     return {
-        "Download Speed": round((bytes_recv_delta / elapsed_seconds) / BYTES_PER_KB, 2),
-        "Upload Speed": round((bytes_sent_delta / elapsed_seconds) / BYTES_PER_KB, 2),
+        "Download Speed": round(
+            bytes_recv_delta * 8 / elapsed_seconds / BITS_PER_MEGABIT,
+            NETWORK_SPEED_DECIMAL_PLACES,
+        ),
+        "Upload Speed": round(
+            bytes_sent_delta * 8 / elapsed_seconds / BITS_PER_MEGABIT,
+            NETWORK_SPEED_DECIMAL_PLACES,
+        ),
     }
