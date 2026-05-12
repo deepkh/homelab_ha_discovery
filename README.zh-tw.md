@@ -10,7 +10,7 @@
 
 用於 homelab 指標的 Python MQTT 發布器，支援 Home Assistant MQTT discovery。
 
-目前可執行的發布器會從本機 Debian 主機、本機 Docker containers、本機 Frigate instances，以及透過 SSH 從 ASUS routers 收集指標，並將 JSON payload 發布到 MQTT。一般執行會先發布保留的 Home Assistant discovery config，然後透過同一個 MQTT connection 發布目前 publish cycle 的指標狀態。外部 systemd timer 執行可在 discovery 已註冊後使用 `--publisher-only`。也可以使用 `--timer SECONDS` 進入長時間執行的服務模式。
+目前可執行的發布器會從本機 Debian 主機、本機 Docker containers、本機 Frigate instances，以及透過 SSH 從 ASUS routers 收集指標，並將 JSON payload 發布到 MQTT。單次執行會先發布保留的 Home Assistant discovery config，然後在該次執行中透過一個 MQTT connection 發布目前的指標狀態。外部 systemd timer 執行可在 discovery 已註冊後使用 `--publisher-only`。使用 `--timer SECONDS` 的長時間執行服務模式會保持一個 MQTT connection 開啟，並在各 publish interval 重複使用。
 
 AI agent 和 repository 維護規則請見 [AGENTS.md](AGENTS.md)。
 
@@ -175,7 +175,9 @@ Home Assistant entities。
 產生的 units 會使用 `EnvironmentFile=-/etc/homelab-ha-discovery/mqtt.env`，但
 當真正的 env 檔不存在時，`enable --now` 會拒絕 enable/start services，除非傳入
 `--allow-missing-mqtt-env`。這些 units 會以長時間執行的 `--timer` 模式執行現有
-publishers。預設 interval 為 CPU 和 GPU `5.0` 秒、磁碟和 NVMe SMART `60.0`
+publishers，因此每個 service 執行期間會保持一個 MQTT connection 開啟。如果
+publisher process 結束，systemd 會在 60 秒後重新啟動 service。預設 interval
+為 CPU 和 GPU `5.0` 秒、磁碟和 NVMe SMART `60.0`
 秒、network `1.0` 秒、Docker containers `60.0` 秒、Frigate `10.0` 秒、
 ASUS router CPU `1.0` 秒、ASUS router network `1.0` 秒，以及 ASUS router
 connected clients `1.0` 秒。
@@ -368,8 +370,9 @@ discovery 和一個 state payload，例如 `plex`、`gitlab`、`nginx` 會各自
 payload。Container component 會優先使用 `homelab-ha-discovery.component`
 label，若沒有則由 container name 產生。不要用 container ID 作為穩定的 Home
 Assistant identity，因為 container recreate 後 ID 會改變。如果兩個 containers
-解析成相同 component，腳本會在發布前結束。Discovery 和 state messages 會在每個
-publish cycle 用同一個 MQTT connection 批次發布。
+解析成相同 component，腳本會在發布前結束。Discovery 和 state messages 會一起
+批次發布。單次執行會為該批次使用一個 MQTT connection；長時間執行的 `--timer`
+mode 則會為每個批次重複使用已開啟的 MQTT connection。
 
 Production 建議使用 Docker label filtering：
 
@@ -499,7 +502,7 @@ python3 src/homelab_ha_discovery/scripts/publish_asus_router_network_metrics.py 
 python3 src/homelab_ha_discovery/scripts/publish_asus_router_connected_clients_metrics.py --ha-device-id hpc --router-name "ASUS AX86U" --ssh-user router-user --ssh-ip router-ip-address --publisher-only
 ```
 
-若要使用長時間執行的服務模式，請使用 `--timer SECONDS`。大多數發布器會立即發布第一次指標，之後腳本會在每次發布嘗試之間休眠。本機 network 指標會先建立 baseline，等待一個 interval 後，才發布第一次計算出的速度。Docker container 指標也會先建立 baseline，並在每個 interval 重新列舉 containers。ASUS router network 指標會在每次發布嘗試期間執行一秒遠端 sample：
+若要使用長時間執行的服務模式，請使用 `--timer SECONDS`。大多數發布器會立即發布第一次指標，之後腳本會在每次發布嘗試之間休眠。本機 network 指標會先建立 baseline，等待一個 interval 後，才發布第一次計算出的速度。Docker container 指標也會先建立 baseline，並在每個 interval 重新列舉 containers。ASUS router network 指標會在每次發布嘗試期間執行一秒遠端 sample。Timer mode 會保持一個 MQTT connection 開啟直到 process 結束；one-shot 執行仍會在每次 invocation 連線和斷線：
 
 ```bash
 python3 src/homelab_ha_discovery/scripts/publish_cpu_metrics.py --ha-device-id hpc --timer 5.0
@@ -806,8 +809,10 @@ GPU usage 使用 `%`；camera frame rates 使用 `fps`；detector inference spee
 且 discovery config 會指向同一個 topic。Docker container 指標永遠使用每個
 container 各自的 state topic。
 
-Discovery config 會被 retain。Metric state 預設不 retain。每個 publish cycle 會用
-一個 MQTT connection 發布已 queue 的 discovery 和 state messages。
+Discovery config 會被 retain。Metric state 預設不 retain。每次 one-shot
+invocation 會用一個 MQTT connection 發布已 queue 的 discovery 和 state messages。
+長時間執行的 `--timer` mode 會保持一個 MQTT connection 開啟，並用它發布每個
+已 queue 的 publish batch。
 
 ## 開發
 

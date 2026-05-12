@@ -22,6 +22,7 @@ from homelab_ha_discovery.scripts.install_debian_host_systemd import (
     command_restart,
     command_stop,
     command_uninstall,
+    render_unit,
     service_command,
     service_unit_name,
 )
@@ -668,6 +669,22 @@ class InstallDebianHostSystemdTest(unittest.TestCase):
                 ],
                 False,
             )
+
+    def test_rendered_unit_restarts_after_sixty_seconds(self) -> None:
+        paths = RuntimePaths(
+            app_dir=Path("/opt/homelab-ha-discovery"),
+            config_dir=Path("/etc/homelab-ha-discovery"),
+            systemd_dir=Path("/etc/systemd/system"),
+            source_root=Path("/checkout"),
+        )
+        unit = render_unit(
+            paths,
+            "hpc",
+            {"type": "cpu", "enabled": True, "timer": 5.0},
+            discovery_timer=60.0,
+        )
+
+        self.assertIn("Restart=always\nRestartSec=60s\n", unit.content)
 
 
 if __name__ == "__main__":

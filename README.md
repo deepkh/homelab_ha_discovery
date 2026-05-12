@@ -10,7 +10,7 @@
 
 Python MQTT publishers for homelab metrics with Home Assistant MQTT discovery.
 
-The current runnable publishers collect metrics from the local Debian host, local Docker containers, local Frigate instances, and ASUS routers over SSH, then publish JSON payloads to MQTT. Normal runs publish retained Home Assistant discovery config first, then publish the current metric state through one MQTT connection per publish cycle. External systemd timer runs can use `--publisher-only` after discovery has already been registered. Long-running service mode is also available with `--timer SECONDS`.
+The current runnable publishers collect metrics from the local Debian host, local Docker containers, local Frigate instances, and ASUS routers over SSH, then publish JSON payloads to MQTT. One-shot runs publish retained Home Assistant discovery config first, then publish the current metric state through one MQTT connection for that run. External systemd timer runs can use `--publisher-only` after discovery has already been registered. Long-running service mode with `--timer SECONDS` keeps one MQTT connection open and reuses it across publish intervals.
 
 For AI agent and repository maintenance rules, see [AGENTS.md](AGENTS.md).
 
@@ -180,7 +180,9 @@ Home Assistant entities untouched.
 Generated units use `EnvironmentFile=-/etc/homelab-ha-discovery/mqtt.env`, but
 `enable --now` refuses to enable/start services when the real env file is
 missing unless `--allow-missing-mqtt-env` is passed. The units run the existing
-publishers in long-running `--timer` mode. Default intervals are CPU and GPU
+publishers in long-running `--timer` mode, so each service keeps one MQTT
+connection open while it is running. If a publisher process exits, systemd
+restarts the service after 60 seconds. Default intervals are CPU and GPU
 `5.0` seconds, disk and NVMe SMART `60.0` seconds, network `1.0`
 second, Docker containers `60.0` seconds, Frigate `10.0` seconds, ASUS router
 CPU `1.0` second, ASUS router network `1.0` second, and ASUS router connected
@@ -387,8 +389,9 @@ is derived from the `homelab-ha-discovery.component` label when present,
 otherwise from the container name. Do not use container IDs as stable Home
 Assistant identity because they change when containers are recreated. If two
 containers resolve to the same component, the script exits before publishing.
-Discovery and state messages are batched through one MQTT connection per
-publish cycle.
+Discovery and state messages are batched together. One-shot runs use one MQTT
+connection for that batch, while long-running `--timer` mode reuses the open
+MQTT connection for each batch.
 
 Recommended production mode is Docker label filtering:
 
@@ -530,7 +533,9 @@ the first metric immediately, then sleep between publish attempts. Local
 network metrics establish a baseline first, wait one interval, then publish the
 first calculated speed. Docker container metrics also establish a baseline
 first and re-enumerate containers every interval. ASUS router network metrics
-perform their one-second remote sample during each publish attempt:
+perform their one-second remote sample during each publish attempt. Timer mode
+keeps one MQTT connection open until the process exits; one-shot runs still
+connect and disconnect per invocation:
 
 ```bash
 python3 src/homelab_ha_discovery/scripts/publish_cpu_metrics.py --ha-device-id hpc --timer 5.0
@@ -849,8 +854,9 @@ topic and discovery config points to that exact topic. Docker container metrics
 always use per-container state topics.
 
 Discovery config is retained. Metric state is non-retained by default. Each
-publish cycle uses one MQTT connection for the queued discovery and state
-messages.
+one-shot invocation uses one MQTT connection for the queued discovery and state
+messages. Long-running `--timer` mode keeps one MQTT connection open and uses
+it for each queued publish batch.
 
 ## Development
 

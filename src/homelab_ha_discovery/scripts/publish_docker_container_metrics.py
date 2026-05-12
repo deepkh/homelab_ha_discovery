@@ -28,7 +28,7 @@ from homelab_ha_discovery.discovery import (
     validate_expire_after_seconds,
 )
 from homelab_ha_discovery.env import load_env_files
-from homelab_ha_discovery.mqtt import MqttMessage, publish_mqtt_many
+from homelab_ha_discovery.mqtt import MqttMessage, MqttPublisher, publish_mqtt_many
 from homelab_ha_discovery.scripts.timer import validate_timer_seconds
 
 
@@ -241,6 +241,7 @@ def publish_docker_metrics_from_samples(
     discovery_components: set[str] | None = None,
     expire_after: float | None = None,
     debug: bool = False,
+    mqtt_publisher: MqttPublisher | None = None,
 ) -> int:
     try:
         debug_sample(debug, "previous sample", previous_sample)
@@ -265,8 +266,11 @@ def publish_docker_metrics_from_samples(
                     "or run without --include-label"
                 ),
             )
-        debug_log(debug, "loading MQTT environment files")
-        load_env_files(env_files)
+        if mqtt_publisher is None:
+            debug_log(debug, "loading MQTT environment files")
+            load_env_files(env_files)
+        else:
+            debug_log(debug, "using existing MQTT publisher")
 
         mqtt_messages: list[MqttMessage] = []
         if not publisher_only:
@@ -311,10 +315,13 @@ def publish_docker_metrics_from_samples(
             debug,
             f"publishing {len(mqtt_messages)} MQTT message(s) in one connection",
         )
-        publish_mqtt_many(
-            mqtt_messages,
-            default_client_id=docker_metrics_client_id(device),
-        )
+        if mqtt_publisher is None:
+            publish_mqtt_many(
+                mqtt_messages,
+                default_client_id=docker_metrics_client_id(device),
+            )
+        else:
+            mqtt_publisher.publish_many(mqtt_messages)
     except Exception as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
@@ -331,6 +338,7 @@ def publish_docker_metrics(
     publisher_only: bool = False,
     expire_after: float | None = None,
     debug: bool = False,
+    mqtt_publisher: MqttPublisher | None = None,
 ) -> int:
     try:
         debug_log(
@@ -371,6 +379,7 @@ def publish_docker_metrics(
         publisher_only=publisher_only,
         expire_after=expire_after,
         debug=debug,
+        mqtt_publisher=mqtt_publisher,
     )
 
 
@@ -388,6 +397,7 @@ def run_docker_publish_timer(
     next_discovery_publish_at = 0.0 if not publisher_only else None
     discovered_components: set[str] = set()
     try:
+        load_env_files(DEFAULT_ENV_FILES)
         debug_log(
             debug,
             (
@@ -399,69 +409,74 @@ def run_docker_publish_timer(
                 f"expire_after={expire_after}"
             ),
         )
-        debug_log(debug, "reading Docker baseline sample")
-        previous_sample = read_docker_container_sample(
-            docker_command=docker_command,
-            include_all=include_all,
-            include_label_selectors=include_label_selectors,
-        )
-        debug_sample(debug, "baseline sample", previous_sample)
-        while True:
-            debug_log(debug, f"sleeping {timer} seconds before next Docker sample")
-            time.sleep(timer)
-            debug_log(debug, "reading Docker current sample")
-            current_sample = read_docker_container_sample(
+        with MqttPublisher(
+            default_client_id=docker_metrics_client_id(device),
+        ) as mqtt_publisher:
+            debug_log(debug, "reading Docker baseline sample")
+            previous_sample = read_docker_container_sample(
                 docker_command=docker_command,
                 include_all=include_all,
                 include_label_selectors=include_label_selectors,
             )
-            publish_discovery = (
-                next_discovery_publish_at is not None
-                and time.monotonic() >= next_discovery_publish_at
-            )
-            current_components = {
-                container.component
-                for container in current_sample.containers.values()
-            }
-            new_components = current_components - discovered_components
-            discovery_components = None if publish_discovery else new_components
-            should_publish_discovery = (
-                not publisher_only
-                and (publish_discovery or bool(discovery_components))
-            )
-            debug_log(
-                debug,
-                (
-                    f"timer publish decision: publish_discovery={publish_discovery} "
-                    f"new_components={sorted(new_components)} "
-                    f"should_publish_discovery={should_publish_discovery}"
-                ),
-            )
-            result = publish_docker_metrics_from_samples(
-                DEFAULT_ENV_FILES,
-                device,
-                previous_sample,
-                current_sample,
-                publisher_only=not should_publish_discovery,
-                discovery_components=discovery_components,
-                expire_after=expire_after,
-                debug=debug,
-            )
-            if result != 0:
-                return result
-            previous_sample = current_sample
-            if should_publish_discovery:
-                if discovery_components is None:
-                    discovered_components.update(current_components)
-                else:
-                    discovered_components.update(discovery_components)
-            if publish_discovery:
-                if timer_publish_discovery_config is None:
-                    next_discovery_publish_at = None
-                else:
-                    next_discovery_publish_at = (
-                        time.monotonic() + timer_publish_discovery_config
-                    )
+            debug_sample(debug, "baseline sample", previous_sample)
+            while True:
+                debug_log(debug, f"sleeping {timer} seconds before next Docker sample")
+                time.sleep(timer)
+                debug_log(debug, "reading Docker current sample")
+                current_sample = read_docker_container_sample(
+                    docker_command=docker_command,
+                    include_all=include_all,
+                    include_label_selectors=include_label_selectors,
+                )
+                publish_discovery = (
+                    next_discovery_publish_at is not None
+                    and time.monotonic() >= next_discovery_publish_at
+                )
+                current_components = {
+                    container.component
+                    for container in current_sample.containers.values()
+                }
+                new_components = current_components - discovered_components
+                discovery_components = None if publish_discovery else new_components
+                should_publish_discovery = (
+                    not publisher_only
+                    and (publish_discovery or bool(discovery_components))
+                )
+                debug_log(
+                    debug,
+                    (
+                        f"timer publish decision: publish_discovery="
+                        f"{publish_discovery} "
+                        f"new_components={sorted(new_components)} "
+                        f"should_publish_discovery={should_publish_discovery}"
+                    ),
+                )
+                result = publish_docker_metrics_from_samples(
+                    DEFAULT_ENV_FILES,
+                    device,
+                    previous_sample,
+                    current_sample,
+                    publisher_only=not should_publish_discovery,
+                    discovery_components=discovery_components,
+                    expire_after=expire_after,
+                    debug=debug,
+                    mqtt_publisher=mqtt_publisher,
+                )
+                if result != 0:
+                    return result
+                previous_sample = current_sample
+                if should_publish_discovery:
+                    if discovery_components is None:
+                        discovered_components.update(current_components)
+                    else:
+                        discovered_components.update(discovery_components)
+                if publish_discovery:
+                    if timer_publish_discovery_config is None:
+                        next_discovery_publish_at = None
+                    else:
+                        next_discovery_publish_at = (
+                            time.monotonic() + timer_publish_discovery_config
+                        )
     except KeyboardInterrupt:
         return 0
     except Exception as exc:

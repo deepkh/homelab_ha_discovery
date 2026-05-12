@@ -49,6 +49,22 @@ FRIGATE_METRICS = {
 }
 
 
+class FakeMqttPublisher:
+    def __init__(self, default_client_id: str) -> None:
+        self.default_client_id = default_client_id
+
+    def __enter__(self) -> "FakeMqttPublisher":
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: object | None,
+    ) -> None:
+        return None
+
+
 class PublishFrigateMetricsTest(unittest.TestCase):
     def test_discovery_topics_and_value_templates(self) -> None:
         state_topic = script.frigate_metrics_state_topic("hpc")
@@ -208,6 +224,8 @@ class PublishFrigateMetricsTest(unittest.TestCase):
                 "run_publish_timer",
                 side_effect=fake_run_publish_timer,
             ),
+            patch.object(script, "load_env_files"),
+            patch.object(script, "MqttPublisher", FakeMqttPublisher),
             patch.object(script, "publish_frigate_metrics", return_value=0) as publish,
             patch.object(script.time, "monotonic", side_effect=[1.0, 1.0, 62.0, 62.0]),
         ):
@@ -239,6 +257,8 @@ class PublishFrigateMetricsTest(unittest.TestCase):
                 "run_publish_timer",
                 side_effect=fake_run_publish_timer,
             ),
+            patch.object(script, "load_env_files"),
+            patch.object(script, "MqttPublisher", FakeMqttPublisher),
             patch.object(script, "publish_frigate_metrics", return_value=0) as publish,
         ):
             result = script.main(

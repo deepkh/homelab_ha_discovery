@@ -896,7 +896,7 @@ def render_unit(
             f"EnvironmentFile=-{systemd_arg(paths.mqtt_env_path)}",
             f"ExecStart={command}",
             "Restart=always",
-            "RestartSec=10s",
+            "RestartSec=60s",
             "",
             "[Install]",
             "WantedBy=multi-user.target",

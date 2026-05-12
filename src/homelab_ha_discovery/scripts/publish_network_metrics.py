@@ -26,7 +26,7 @@ from homelab_ha_discovery.discovery import (
     validate_expire_after_seconds,
 )
 from homelab_ha_discovery.env import load_env_files
-from homelab_ha_discovery.mqtt import MqttMessage, publish_mqtt_many
+from homelab_ha_discovery.mqtt import MqttMessage, MqttPublisher, publish_mqtt_many
 from homelab_ha_discovery.scripts.timer import validate_timer_seconds
 
 
@@ -136,10 +136,12 @@ def publish_network_metrics_from_samples(
     default_mqtt_topic: str | None = None,
     publisher_only: bool = False,
     expire_after: float | None = None,
+    mqtt_publisher: MqttPublisher | None = None,
 ) -> int:
     try:
         metrics = calculate_network_speed_metrics(previous_sample, current_sample)
-        load_env_files(env_files)
+        if mqtt_publisher is None:
+            load_env_files(env_files)
         component = network_component_from_dev(dev)
         mqtt_topic = os.environ.get(
             "MQTT_TOPIC",
@@ -158,10 +160,13 @@ def publish_network_metrics_from_samples(
 
         payload = json.dumps(metrics, separators=(",", ":"))
         mqtt_messages.append((mqtt_topic, payload, False))
-        publish_mqtt_many(
-            mqtt_messages,
-            default_client_id=network_metrics_client_id(device, component),
-        )
+        if mqtt_publisher is None:
+            publish_mqtt_many(
+                mqtt_messages,
+                default_client_id=network_metrics_client_id(device, component),
+            )
+        else:
+            mqtt_publisher.publish_many(mqtt_messages)
     except Exception as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
@@ -176,6 +181,7 @@ def publish_network_metrics(
     default_mqtt_topic: str | None = None,
     publisher_only: bool = False,
     expire_after: float | None = None,
+    mqtt_publisher: MqttPublisher | None = None,
 ) -> int:
     try:
         previous_sample = read_network_counter_sample(dev)
@@ -194,6 +200,7 @@ def publish_network_metrics(
         default_mqtt_topic=default_mqtt_topic,
         publisher_only=publisher_only,
         expire_after=expire_after,
+        mqtt_publisher=mqtt_publisher,
     )
 
 
@@ -207,33 +214,39 @@ def run_network_publish_timer(
 ) -> int:
     next_discovery_publish_at = 0.0 if not publisher_only else None
     try:
-        previous_sample = read_network_counter_sample(dev)
-        while True:
-            time.sleep(timer)
-            current_sample = read_network_counter_sample(dev)
-            publish_discovery = (
-                next_discovery_publish_at is not None
-                and time.monotonic() >= next_discovery_publish_at
-            )
-            result = publish_network_metrics_from_samples(
-                DEFAULT_ENV_FILES,
-                device,
-                dev,
-                previous_sample,
-                current_sample,
-                publisher_only=not publish_discovery,
-                expire_after=expire_after,
-            )
-            if result != 0:
-                return result
-            previous_sample = current_sample
-            if publish_discovery:
-                if timer_publish_discovery_config is None:
-                    next_discovery_publish_at = None
-                else:
-                    next_discovery_publish_at = (
-                        time.monotonic() + timer_publish_discovery_config
-                    )
+        load_env_files(DEFAULT_ENV_FILES)
+        component = network_component_from_dev(dev)
+        with MqttPublisher(
+            default_client_id=network_metrics_client_id(device, component),
+        ) as mqtt_publisher:
+            previous_sample = read_network_counter_sample(dev)
+            while True:
+                time.sleep(timer)
+                current_sample = read_network_counter_sample(dev)
+                publish_discovery = (
+                    next_discovery_publish_at is not None
+                    and time.monotonic() >= next_discovery_publish_at
+                )
+                result = publish_network_metrics_from_samples(
+                    DEFAULT_ENV_FILES,
+                    device,
+                    dev,
+                    previous_sample,
+                    current_sample,
+                    publisher_only=not publish_discovery,
+                    expire_after=expire_after,
+                    mqtt_publisher=mqtt_publisher,
+                )
+                if result != 0:
+                    return result
+                previous_sample = current_sample
+                if publish_discovery:
+                    if timer_publish_discovery_config is None:
+                        next_discovery_publish_at = None
+                    else:
+                        next_discovery_publish_at = (
+                            time.monotonic() + timer_publish_discovery_config
+                        )
     except KeyboardInterrupt:
         return 0
     except Exception as exc:

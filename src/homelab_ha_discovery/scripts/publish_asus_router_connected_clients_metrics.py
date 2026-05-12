@@ -30,7 +30,7 @@ from homelab_ha_discovery.discovery import (
     validate_expire_after_seconds,
 )
 from homelab_ha_discovery.env import load_env_files
-from homelab_ha_discovery.mqtt import MqttMessage, publish_mqtt_many
+from homelab_ha_discovery.mqtt import MqttMessage, MqttPublisher, publish_mqtt_many
 from homelab_ha_discovery.scripts.timer import (
     run_publish_timer,
     validate_timer_seconds,
@@ -155,10 +155,14 @@ def publish_asus_router_connected_clients_metrics(
     publisher_only: bool = False,
     debug: bool = False,
     expire_after: float | None = None,
+    mqtt_publisher: MqttPublisher | None = None,
 ) -> int:
     try:
-        debug_log(debug, "loading MQTT environment files")
-        load_env_files(env_files)
+        if mqtt_publisher is None:
+            debug_log(debug, "loading MQTT environment files")
+            load_env_files(env_files)
+        else:
+            debug_log(debug, "using existing MQTT publisher")
         component = router_component_from_name(router_name)
         mqtt_topic = os.environ.get(
             "MQTT_TOPIC",
@@ -208,13 +212,16 @@ def publish_asus_router_connected_clients_metrics(
             debug,
             f"publishing {len(mqtt_messages)} MQTT message(s) in one connection",
         )
-        publish_mqtt_many(
-            mqtt_messages,
-            default_client_id=asus_router_connected_clients_client_id(
-                device,
-                component,
-            ),
-        )
+        if mqtt_publisher is None:
+            publish_mqtt_many(
+                mqtt_messages,
+                default_client_id=asus_router_connected_clients_client_id(
+                    device,
+                    component,
+                ),
+            )
+        else:
+            mqtt_publisher.publish_many(mqtt_messages)
         debug_log(debug, "publish completed")
     except Exception as exc:
         print(f"Error: {exc}", file=sys.stderr)
@@ -314,6 +321,8 @@ def main(argv: list[str] | None = None) -> int:
         "--timer-publish-discovery-config",
     ):
         return 1
+    if not validate_timer_seconds(args.timer, "--timer"):
+        return 1
     if not validate_expire_after_seconds(args.expire_after):
         return 1
 
@@ -321,7 +330,7 @@ def main(argv: list[str] | None = None) -> int:
 
     next_discovery_publish_at = 0.0 if not args.publisher_only else None
 
-    def publish() -> int:
+    def publish(mqtt_publisher: MqttPublisher | None = None) -> int:
         nonlocal next_discovery_publish_at
         publish_discovery = (
             next_discovery_publish_at is not None
@@ -338,6 +347,7 @@ def main(argv: list[str] | None = None) -> int:
             publisher_only=not publish_discovery,
             expire_after=expire_after,
             debug=args.debug,
+            mqtt_publisher=mqtt_publisher,
         )
         if result == 0 and publish_discovery:
             if args.timer_publish_discovery_config is None:
@@ -347,6 +357,21 @@ def main(argv: list[str] | None = None) -> int:
                     time.monotonic() + args.timer_publish_discovery_config
                 )
         return result
+
+    if args.timer is not None:
+        try:
+            load_env_files(DEFAULT_ENV_FILES)
+            component = router_component_from_name(args.router_name)
+            with MqttPublisher(
+                default_client_id=asus_router_connected_clients_client_id(
+                    args.device,
+                    component,
+                ),
+            ) as mqtt_publisher:
+                return run_publish_timer(args.timer, lambda: publish(mqtt_publisher))
+        except Exception as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            return 1
 
     return run_publish_timer(args.timer, publish)
 
