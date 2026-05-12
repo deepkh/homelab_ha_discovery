@@ -13,6 +13,8 @@ import shlex
 import shutil
 import subprocess
 import sys
+import urllib.error
+import urllib.request
 from typing import Any
 
 
@@ -31,11 +33,14 @@ DEFAULT_TIMERS = {
     "nvme_smart": 60.0,
     "network": 1.0,
     "docker_containers": 60.0,
+    "frigate": 10.0,
     "asus_router_cpu": 1.0,
     "asus_router_connected_clients": 1.0,
     "asus_router_network": 1.0,
 }
 DEFAULT_TIMER_PUBLISH_DISCOVERY_CONFIG = 60.0
+DEFAULT_FRIGATE_METRICS_URL = "http://127.0.0.1:5000/api/metrics"
+FRIGATE_DETECT_TIMEOUT_SECONDS = 2.0
 SCRIPT_BY_SERVICE_TYPE = {
     "cpu": "publish_cpu_metrics.py",
     "gpu": "publish_gpu_metrics.py",
@@ -43,6 +48,7 @@ SCRIPT_BY_SERVICE_TYPE = {
     "nvme_smart": "publish_nvme_metrics.py",
     "network": "publish_network_metrics.py",
     "docker_containers": "publish_docker_container_metrics.py",
+    "frigate": "publish_frigate_metrics.py",
     "asus_router_cpu": "publish_asus_router_cpu_metrics.py",
     "asus_router_connected_clients": (
         "publish_asus_router_connected_clients_metrics.py"
@@ -255,6 +261,18 @@ def command_has_output(command: list[str], timeout: float = 5.0) -> bool:
     return result.returncode == 0 and bool(result.stdout.strip())
 
 
+def http_url_reachable(
+    url: str,
+    timeout: float = FRIGATE_DETECT_TIMEOUT_SECONDS,
+) -> bool:
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as response:
+            status = getattr(response, "status", 200)
+            return 200 <= status < 300
+    except (OSError, urllib.error.URLError):
+        return False
+
+
 def read_text(path: Path) -> str:
     try:
         return path.read_text(encoding="utf-8").strip()
@@ -428,6 +446,21 @@ def build_detected_config(device: str) -> dict[str, Any]:
                 "disabled template; enable manually after confirming Docker socket "
                 "access"
             ),
+        )
+    )
+    frigate_reachable = http_url_reachable(DEFAULT_FRIGATE_METRICS_URL)
+    frigate_values: dict[str, Any] = {
+        "url": DEFAULT_FRIGATE_METRICS_URL,
+        "expire_after": None,
+        "missing_requirements": [],
+    }
+    if not frigate_reachable:
+        frigate_values["note"] = "disabled template; enable after Frigate is running"
+    services.append(
+        service_entry(
+            "frigate",
+            frigate_reachable,
+            **frigate_values,
         )
     )
     services.append(
@@ -626,6 +659,8 @@ def service_component(service: dict[str, Any]) -> str:
         return require_string(service.get("dev"), "network dev")
     if service_type == "docker_containers":
         return "docker-containers"
+    if service_type == "frigate":
+        return "frigate"
     if service_type == "asus_router_network":
         return (
             f"{require_string(service.get('router_name'), 'router_name')} "
@@ -652,6 +687,8 @@ def service_unit_name(device: str, service: dict[str, Any]) -> str:
         suffix = f"network-{component}"
     elif service_type == "docker_containers":
         suffix = "docker-containers"
+    elif service_type == "frigate":
+        suffix = "frigate"
     elif service_type == "asus_router_cpu":
         suffix = f"asus-router-cpu-{component}"
     elif service_type == "asus_router_connected_clients":
@@ -678,6 +715,8 @@ def service_description(device: str, service: dict[str, Any]) -> str:
         return f"Homelab HA Discovery network metrics for {device} {component}"
     if service_type == "docker_containers":
         return f"Homelab HA Discovery Docker container metrics for {device}"
+    if service_type == "frigate":
+        return f"Homelab HA Discovery Frigate metrics for {device}"
     if service_type == "asus_router_cpu":
         return f"Homelab HA Discovery ASUS router CPU metrics for {device} {component}"
     if service_type == "asus_router_connected_clients":
@@ -727,6 +766,18 @@ def service_command(
                     require_string(service.get("docker_command"), "docker_command"),
                 ]
             )
+        if service.get("debug"):
+            command.append("--debug")
+    if service_type == "frigate":
+        command.extend(
+            [
+                "--url",
+                require_string(
+                    service.get("url", DEFAULT_FRIGATE_METRICS_URL),
+                    "url",
+                ),
+            ]
+        )
         if service.get("debug"):
             command.append("--debug")
     if service_type == "asus_router_network":

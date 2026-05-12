@@ -14,6 +14,7 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 from homelab_ha_discovery.scripts.install_debian_host_systemd import (
+    DEFAULT_FRIGATE_METRICS_URL,
     RuntimePaths,
     build_detected_config,
     command_disable,
@@ -226,6 +227,47 @@ class InstallDebianHostSystemdTest(unittest.TestCase):
             ],
         )
 
+    def test_frigate_unit_name_and_command(self) -> None:
+        paths = RuntimePaths(
+            app_dir=Path("/opt/homelab-ha-discovery"),
+            config_dir=Path("/etc/homelab-ha-discovery"),
+            systemd_dir=Path("/etc/systemd/system"),
+            source_root=Path("/checkout"),
+        )
+        service = {
+            "type": "frigate",
+            "enabled": True,
+            "timer": 10.0,
+            "url": "http://127.0.0.1:5000/api/metrics",
+            "debug": True,
+        }
+
+        self.assertEqual(
+            service_unit_name("hpc", service),
+            "homelab-ha-discovery-hpc-frigate.service",
+        )
+
+        command = service_command(paths, "hpc", service, discovery_timer=60.0)
+        self.assertEqual(
+            command,
+            [
+                "/opt/homelab-ha-discovery/.venv/bin/python",
+                (
+                    "/opt/homelab-ha-discovery/src/homelab_ha_discovery/scripts/"
+                    "publish_frigate_metrics.py"
+                ),
+                "--ha-device-id",
+                "hpc",
+                "--url",
+                "http://127.0.0.1:5000/api/metrics",
+                "--debug",
+                "--timer",
+                "10.0",
+                "--timer-publish-discovery-config",
+                "60.0",
+            ],
+        )
+
     def test_expire_after_is_generic_service_option(self) -> None:
         paths = RuntimePaths(
             app_dir=Path("/opt/homelab-ha-discovery"),
@@ -316,6 +358,11 @@ class InstallDebianHostSystemdTest(unittest.TestCase):
                 "detect_network_interfaces",
                 return_value=[],
             ),
+            patch(
+                "homelab_ha_discovery.scripts.install_debian_host_systemd."
+                "http_url_reachable",
+                return_value=False,
+            ),
         ):
             config = build_detected_config("hpc")
 
@@ -373,6 +420,11 @@ class InstallDebianHostSystemdTest(unittest.TestCase):
                 "detect_network_interfaces",
                 return_value=[],
             ),
+            patch(
+                "homelab_ha_discovery.scripts.install_debian_host_systemd."
+                "http_url_reachable",
+                return_value=False,
+            ),
         ):
             config = build_detected_config("hpc")
 
@@ -396,6 +448,117 @@ class InstallDebianHostSystemdTest(unittest.TestCase):
                         "disabled template; enable manually after confirming "
                         "Docker socket access"
                     ),
+                }
+            ],
+        )
+
+    def test_detected_config_enables_frigate_when_metrics_are_reachable(self) -> None:
+        with (
+            patch(
+                "homelab_ha_discovery.scripts.install_debian_host_systemd."
+                "command_exists",
+                return_value=False,
+            ),
+            patch(
+                "homelab_ha_discovery.scripts.install_debian_host_systemd."
+                "command_has_output",
+                return_value=False,
+            ),
+            patch(
+                "homelab_ha_discovery.scripts.install_debian_host_systemd."
+                "detect_disk_devices",
+                return_value=[],
+            ),
+            patch(
+                "homelab_ha_discovery.scripts.install_debian_host_systemd."
+                "detect_nvme_devices",
+                return_value=[],
+            ),
+            patch(
+                "homelab_ha_discovery.scripts.install_debian_host_systemd."
+                "detect_network_interfaces",
+                return_value=[],
+            ),
+            patch(
+                "homelab_ha_discovery.scripts.install_debian_host_systemd."
+                "http_url_reachable",
+                return_value=True,
+            ),
+        ):
+            config = build_detected_config("hpc")
+
+        frigate_entries = [
+            service
+            for service in config["services"]
+            if service["type"] == "frigate"
+        ]
+        self.assertEqual(
+            frigate_entries,
+            [
+                {
+                    "type": "frigate",
+                    "enabled": True,
+                    "timer": 10.0,
+                    "expire_after": None,
+                    "url": DEFAULT_FRIGATE_METRICS_URL,
+                    "missing_requirements": [],
+                }
+            ],
+        )
+
+    def test_detected_config_adds_disabled_frigate_template_when_unreachable(
+        self,
+    ) -> None:
+        with (
+            patch(
+                "homelab_ha_discovery.scripts.install_debian_host_systemd."
+                "command_exists",
+                return_value=False,
+            ),
+            patch(
+                "homelab_ha_discovery.scripts.install_debian_host_systemd."
+                "command_has_output",
+                return_value=False,
+            ),
+            patch(
+                "homelab_ha_discovery.scripts.install_debian_host_systemd."
+                "detect_disk_devices",
+                return_value=[],
+            ),
+            patch(
+                "homelab_ha_discovery.scripts.install_debian_host_systemd."
+                "detect_nvme_devices",
+                return_value=[],
+            ),
+            patch(
+                "homelab_ha_discovery.scripts.install_debian_host_systemd."
+                "detect_network_interfaces",
+                return_value=[],
+            ),
+            patch(
+                "homelab_ha_discovery.scripts.install_debian_host_systemd."
+                "http_url_reachable",
+                return_value=False,
+            ),
+        ):
+            config = build_detected_config("hpc")
+
+        frigate_entries = [
+            service
+            for service in config["services"]
+            if service["type"] == "frigate"
+        ]
+        self.assertEqual(
+            frigate_entries,
+            [
+                {
+                    "type": "frigate",
+                    "enabled": False,
+                    "timer": 10.0,
+                    "expire_after": None,
+                    "url": DEFAULT_FRIGATE_METRICS_URL,
+                    "missing_requirements": [],
+                    "note": "disabled template; enable after Frigate is running",
                 }
             ],
         )

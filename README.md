@@ -10,7 +10,7 @@
 
 Python MQTT publishers for homelab metrics with Home Assistant MQTT discovery.
 
-The current runnable publishers collect metrics from the local Debian host, local Docker containers, and ASUS routers over SSH, then publish JSON payloads to MQTT. Normal runs publish retained Home Assistant discovery config first, then publish the current metric state through one MQTT connection per publish cycle. External systemd timer runs can use `--publisher-only` after discovery has already been registered. Long-running service mode is also available with `--timer SECONDS`.
+The current runnable publishers collect metrics from the local Debian host, local Docker containers, local Frigate instances, and ASUS routers over SSH, then publish JSON payloads to MQTT. Normal runs publish retained Home Assistant discovery config first, then publish the current metric state through one MQTT connection per publish cycle. External systemd timer runs can use `--publisher-only` after discovery has already been registered. Long-running service mode is also available with `--timer SECONDS`.
 
 For AI agent and repository maintenance rules, see [AGENTS.md](AGENTS.md).
 
@@ -22,6 +22,7 @@ For AI agent and repository maintenance rules, see [AGENTS.md](AGENTS.md).
 - `nvidia-smi` for NVIDIA GPU publishing
 - `smartctl` for disk and NVMe SMART publishing. On Debian, `smartctl` is provided by `smartmontools`.
 - Docker CLI access for Docker container publishing
+- Frigate metrics endpoint access at `http://127.0.0.1:5000/api/metrics` for Frigate publishing. The Frigate publisher uses no username/password/auth options.
 - `ssh` client access for ASUS router publishing
 - MQTT broker access
 
@@ -181,8 +182,9 @@ Generated units use `EnvironmentFile=-/etc/homelab-ha-discovery/mqtt.env`, but
 missing unless `--allow-missing-mqtt-env` is passed. The units run the existing
 publishers in long-running `--timer` mode. Default intervals are CPU and GPU
 `5.0` seconds, disk and NVMe SMART `60.0` seconds, network `1.0`
-second, Docker containers `60.0` seconds, ASUS router CPU `1.0` second, ASUS
-router network `1.0` second, and ASUS router connected clients `1.0` second.
+second, Docker containers `60.0` seconds, Frigate `10.0` seconds, ASUS router
+CPU `1.0` second, ASUS router network `1.0` second, and ASUS router connected
+clients `1.0` second.
 Generated `host-metrics.json` also includes a top-level
 `timer_publish_discovery_config` default of `60.0`, so generated services
 republish retained Home Assistant discovery config every 60 seconds. Set it to
@@ -220,6 +222,27 @@ set another non-negative seconds value to override it.
 The service user must be able to read Docker state. Membership in the `docker`
 group is common, but Docker socket access is effectively root-equivalent and
 should be treated carefully.
+
+Detect/bootstrap probes the local Frigate metrics endpoint with a short HTTP
+timeout. If `http://127.0.0.1:5000/api/metrics` is reachable, it adds an enabled
+Frigate service entry:
+
+```json
+{
+  "type": "frigate",
+  "enabled": true,
+  "timer": 10.0,
+  "url": "http://127.0.0.1:5000/api/metrics",
+  "expire_after": null,
+  "missing_requirements": []
+}
+```
+
+If the endpoint is not reachable, detect/bootstrap adds the same entry disabled
+with a note to enable it after Frigate is running. The publisher uses the Python
+standard library HTTP client and does not support username/password/auth
+arguments. Add `"debug": true` to print collection and publish progress into the
+service journal.
 
 Detect/bootstrap also adds disabled ASUS router template entries without probing
 the router over SSH:
@@ -403,6 +426,28 @@ payloads to stderr:
 sudo /opt/homelab-ha-discovery/.venv/bin/python /opt/homelab-ha-discovery/src/homelab_ha_discovery/scripts/publish_docker_container_metrics.py --ha-device-id hpc --include-label homelab-ha-discovery.enabled=true --timer 60.0 --timer-publish-discovery-config 60.0 --debug
 ```
 
+Frigate metrics:
+
+```bash
+python3 src/homelab_ha_discovery/scripts/publish_frigate_metrics.py --ha-device-id hpc
+```
+
+The Frigate publisher reads Prometheus text metrics from
+`http://127.0.0.1:5000/api/metrics` by default. Use `--url` to point at another
+Frigate endpoint:
+
+```bash
+python3 src/homelab_ha_discovery/scripts/publish_frigate_metrics.py --ha-device-id hpc --url http://127.0.0.1:5000/api/metrics
+```
+
+It publishes one shared JSON state payload containing `system`, `cameras`,
+`detectors`, `gpus`, and `storage`. Storage `frigate_storage_free_bytes` and
+`frigate_storage_used_bytes` values are converted from bytes to decimal `GB`
+and rounded to three decimal places. The publisher validates HTTP errors,
+malformed Prometheus text, and missing required metric families before
+publishing discovery config or state. Add `--debug` to print HTTP collection,
+discovery, state topic, and payload progress to stderr.
+
 ASUS router CPU metrics:
 
 ```bash
@@ -474,6 +519,7 @@ python3 src/homelab_ha_discovery/scripts/publish_sdx_metrics.py --ha-device-id h
 python3 src/homelab_ha_discovery/scripts/publish_nvme_metrics.py --ha-device-id hpc --dev /dev/nvme0 --publisher-only
 python3 src/homelab_ha_discovery/scripts/publish_network_metrics.py --ha-device-id hpc --dev ppp0 --publisher-only
 python3 src/homelab_ha_discovery/scripts/publish_docker_container_metrics.py --ha-device-id hpc --include-label homelab-ha-discovery.enabled=true --publisher-only
+python3 src/homelab_ha_discovery/scripts/publish_frigate_metrics.py --ha-device-id hpc --publisher-only
 python3 src/homelab_ha_discovery/scripts/publish_asus_router_cpu_metrics.py --ha-device-id hpc --router-name "ASUS AX86U" --ssh-user router-user --ssh-ip router-ip-address --publisher-only
 python3 src/homelab_ha_discovery/scripts/publish_asus_router_network_metrics.py --ha-device-id hpc --router-name "ASUS AX86U" --dev eth0 --ssh-user router-user --ssh-ip router-ip-address --publisher-only
 python3 src/homelab_ha_discovery/scripts/publish_asus_router_connected_clients_metrics.py --ha-device-id hpc --router-name "ASUS AX86U" --ssh-user router-user --ssh-ip router-ip-address --publisher-only
@@ -493,6 +539,7 @@ python3 src/homelab_ha_discovery/scripts/publish_sdx_metrics.py --ha-device-id h
 python3 src/homelab_ha_discovery/scripts/publish_nvme_metrics.py --ha-device-id hpc --dev /dev/nvme0 --timer 5.0
 python3 src/homelab_ha_discovery/scripts/publish_network_metrics.py --ha-device-id hpc --dev ppp0 --timer 1.0
 python3 src/homelab_ha_discovery/scripts/publish_docker_container_metrics.py --ha-device-id hpc --include-label homelab-ha-discovery.enabled=true --timer 60.0
+python3 src/homelab_ha_discovery/scripts/publish_frigate_metrics.py --ha-device-id hpc --timer 10.0
 python3 src/homelab_ha_discovery/scripts/publish_asus_router_cpu_metrics.py --ha-device-id hpc --router-name "ASUS AX86U" --ssh-user router-user --ssh-ip router-ip-address --timer 1.0
 python3 src/homelab_ha_discovery/scripts/publish_asus_router_network_metrics.py --ha-device-id hpc --router-name "ASUS AX86U" --dev eth0 --ssh-user router-user --ssh-ip router-ip-address --timer 1.0
 python3 src/homelab_ha_discovery/scripts/publish_asus_router_connected_clients_metrics.py --ha-device-id hpc --router-name "ASUS AX86U" --ssh-user router-user --ssh-ip router-ip-address --timer 1.0
@@ -517,6 +564,7 @@ python3 src/homelab_ha_discovery/scripts/publish_sdx_metrics.py --ha-device-id h
 python3 src/homelab_ha_discovery/scripts/publish_nvme_metrics.py --ha-device-id hpc --dev /dev/nvme0 --timer 5.0 --timer-publish-discovery-config 60.0
 python3 src/homelab_ha_discovery/scripts/publish_network_metrics.py --ha-device-id hpc --dev ppp0 --timer 1.0 --timer-publish-discovery-config 60.0
 python3 src/homelab_ha_discovery/scripts/publish_docker_container_metrics.py --ha-device-id hpc --include-label homelab-ha-discovery.enabled=true --timer 60.0 --timer-publish-discovery-config 60.0
+python3 src/homelab_ha_discovery/scripts/publish_frigate_metrics.py --ha-device-id hpc --timer 10.0 --timer-publish-discovery-config 60.0
 python3 src/homelab_ha_discovery/scripts/publish_asus_router_cpu_metrics.py --ha-device-id hpc --router-name "ASUS AX86U" --ssh-user router-user --ssh-ip router-ip-address --timer 1.0 --timer-publish-discovery-config 60.0
 python3 src/homelab_ha_discovery/scripts/publish_asus_router_network_metrics.py --ha-device-id hpc --router-name "ASUS AX86U" --dev eth0 --ssh-user router-user --ssh-ip router-ip-address --timer 1.0 --timer-publish-discovery-config 60.0
 python3 src/homelab_ha_discovery/scripts/publish_asus_router_connected_clients_metrics.py --ha-device-id hpc --router-name "ASUS AX86U" --ssh-user router-user --ssh-ip router-ip-address --timer 1.0 --timer-publish-discovery-config 60.0
@@ -769,6 +817,33 @@ state topic and discovery topics. Removed or renamed containers are not
 automatically deleted from Home Assistant; old retained discovery config should
 be cleaned up manually only when intended.
 
+With `--ha-device-id hpc`, Frigate metrics publish one shared state topic:
+
+```text
+homelab-ha-discovery/frigate/metrics/hpc
+```
+
+Payload:
+
+```json
+{"system":{"CPU Usage":12.346,"Memory Usage":45.679},"cameras":{"front door":{"Camera FPS":5.0,"Process FPS":4.5,"Skipped FPS":0.0,"Detection FPS":3.25}},"detectors":{"coral":{"Inference Speed":0.011}},"gpus":{"nvidia 0":{"GPU Usage":33.333,"Memory Usage":55.556}},"storage":{"/media/frigate/recordings":{"Free GB":1.235,"Used GB":9.877}}}
+```
+
+Discovery topics include normalized Frigate components:
+
+```text
+homeassistant/sensor/homelab_ha_discovery_hpc_frigate_system_cpu_usage/config
+homeassistant/sensor/homelab_ha_discovery_hpc_frigate_system_memory_usage/config
+homeassistant/sensor/homelab_ha_discovery_hpc_frigate_camera_front_door_camera_fps/config
+homeassistant/sensor/homelab_ha_discovery_hpc_frigate_detector_coral_inference_speed/config
+homeassistant/sensor/homelab_ha_discovery_hpc_frigate_gpu_nvidia_0_usage/config
+homeassistant/sensor/homelab_ha_discovery_hpc_frigate_storage_media_frigate_recordings_free_gb/config
+```
+
+Frigate discovery value templates read from the shared JSON payload. Units are
+`%` for CPU, memory, and GPU usage; `fps` for camera frame rates; `s` for
+detector inference speed; and `GB` for converted storage values.
+
 If `MQTT_TOPIC` is set, publishers with one state topic use it as the state
 topic and discovery config points to that exact topic. Docker container metrics
 always use per-container state topics.
@@ -799,6 +874,8 @@ python3 -m py_compile src/homelab_ha_discovery/collectors/network_linux.py
 python3 -m py_compile src/homelab_ha_discovery/scripts/publish_network_metrics.py
 python3 -m py_compile src/homelab_ha_discovery/collectors/docker_containers.py
 python3 -m py_compile src/homelab_ha_discovery/scripts/publish_docker_container_metrics.py
+python3 -m py_compile src/homelab_ha_discovery/collectors/frigate_metrics.py
+python3 -m py_compile src/homelab_ha_discovery/scripts/publish_frigate_metrics.py
 python3 -m py_compile src/homelab_ha_discovery/collectors/router_asus_ssh.py
 python3 -m py_compile src/homelab_ha_discovery/scripts/publish_asus_router_cpu_metrics.py
 python3 -m py_compile src/homelab_ha_discovery/scripts/publish_asus_router_network_metrics.py
