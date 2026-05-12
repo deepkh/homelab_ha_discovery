@@ -30,6 +30,7 @@ DEFAULT_TIMERS = {
     "disk_smart": 60.0,
     "nvme_smart": 60.0,
     "network": 1.0,
+    "docker_containers": 60.0,
     "asus_router_cpu": 1.0,
     "asus_router_connected_clients": 1.0,
     "asus_router_network": 1.0,
@@ -41,6 +42,7 @@ SCRIPT_BY_SERVICE_TYPE = {
     "disk_smart": "publish_sdx_metrics.py",
     "nvme_smart": "publish_nvme_metrics.py",
     "network": "publish_network_metrics.py",
+    "docker_containers": "publish_docker_container_metrics.py",
     "asus_router_cpu": "publish_asus_router_cpu_metrics.py",
     "asus_router_connected_clients": (
         "publish_asus_router_connected_clients_metrics.py"
@@ -416,6 +418,19 @@ def build_detected_config(device: str) -> dict[str, Any]:
     services.extend(detect_network_interfaces())
     services.append(
         service_entry(
+            "docker_containers",
+            False,
+            include_label="homelab-ha-discovery.enabled=true",
+            expire_after=None,
+            missing_requirements=[] if command_exists("docker") else ["docker"],
+            note=(
+                "disabled template; enable manually after confirming Docker socket "
+                "access"
+            ),
+        )
+    )
+    services.append(
+        service_entry(
             "asus_router_cpu",
             False,
             router_name="ASUS AX86U",
@@ -523,6 +538,16 @@ def require_positive_seconds(value: object, name: str) -> float:
     return timer
 
 
+def require_non_negative_seconds(value: object, name: str) -> float:
+    try:
+        seconds = float(value)
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError(f"{name} must be a number") from exc
+    if not math.isfinite(seconds) or seconds < 0:
+        raise RuntimeError(f"{name} must be greater than or equal to 0")
+    return seconds
+
+
 def require_ssh_port(value: object) -> int:
     if value is None:
         return 22
@@ -535,6 +560,22 @@ def require_ssh_port(value: object) -> int:
     if port <= 0 or port > 65535:
         raise RuntimeError("ssh_port must be between 1 and 65535")
     return port
+
+
+def docker_include_labels(service: dict[str, Any]) -> list[str]:
+    labels: list[str] = []
+    include_label = service.get("include_label")
+    if include_label is not None:
+        labels.append(require_string(include_label, "include_label"))
+
+    include_labels = service.get("include_labels")
+    if include_labels is None:
+        return labels
+    if not isinstance(include_labels, list):
+        raise RuntimeError("include_labels must be a list")
+    for index, value in enumerate(include_labels):
+        labels.append(require_string(value, f"include_labels[{index}]"))
+    return labels
 
 
 def discovery_timer_for_service(
@@ -582,6 +623,8 @@ def service_component(service: dict[str, Any]) -> str:
         return Path(require_string(service.get("dev"), f"{service_type} dev")).name
     if service_type == "network":
         return require_string(service.get("dev"), "network dev")
+    if service_type == "docker_containers":
+        return "docker-containers"
     if service_type == "asus_router_network":
         return (
             f"{require_string(service.get('router_name'), 'router_name')} "
@@ -606,6 +649,8 @@ def service_unit_name(device: str, service: dict[str, Any]) -> str:
         suffix = f"nvme-{component}"
     elif service_type == "network":
         suffix = f"network-{component}"
+    elif service_type == "docker_containers":
+        suffix = "docker-containers"
     elif service_type == "asus_router_cpu":
         suffix = f"asus-router-cpu-{component}"
     elif service_type == "asus_router_connected_clients":
@@ -630,6 +675,8 @@ def service_description(device: str, service: dict[str, Any]) -> str:
         return f"Homelab HA Discovery NVMe SMART metrics for {device} {component}"
     if service_type == "network":
         return f"Homelab HA Discovery network metrics for {device} {component}"
+    if service_type == "docker_containers":
+        return f"Homelab HA Discovery Docker container metrics for {device}"
     if service_type == "asus_router_cpu":
         return f"Homelab HA Discovery ASUS router CPU metrics for {device} {component}"
     if service_type == "asus_router_connected_clients":
@@ -667,6 +714,32 @@ def service_command(
         command.extend(["--gpu", str(service["gpu_index"])])
     if service_type in {"disk_smart", "nvme_smart", "network"}:
         command.extend(["--dev", require_string(service.get("dev"), "dev")])
+    if service_type == "docker_containers":
+        if service.get("all"):
+            command.append("--all")
+        for label in docker_include_labels(service):
+            command.extend(["--include-label", label])
+        if service.get("docker_command") is not None:
+            command.extend(
+                [
+                    "--docker-command",
+                    require_string(service.get("docker_command"), "docker_command"),
+                ]
+            )
+        if service.get("expire_after") is not None:
+            command.extend(
+                [
+                    "--expire-after",
+                    str(
+                        require_non_negative_seconds(
+                            service.get("expire_after"),
+                            "expire_after",
+                        )
+                    ),
+                ]
+            )
+        if service.get("debug"):
+            command.append("--debug")
     if service_type == "asus_router_network":
         command.extend(
             [

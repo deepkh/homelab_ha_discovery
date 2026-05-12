@@ -5,12 +5,14 @@ from __future__ import annotations
 import os
 import socket
 import sys
+from typing import Iterable
 
 
 DEFAULT_MQTT_HOST = "mqtt-server-ip"
 DEFAULT_MQTT_PORT = 1883
 MQTT_KEEPALIVE_SECONDS = 60
 MQTT_CONNECT_TIMEOUT_SECONDS = 10
+MqttMessage = tuple[str, str, bool]
 
 
 def publish_mqtt(
@@ -19,6 +21,20 @@ def publish_mqtt(
     default_client_id: str = "homelab-ha-discovery",
     retain: bool = False,
 ) -> None:
+    publish_mqtt_many(
+        ((topic, payload, retain),),
+        default_client_id=default_client_id,
+    )
+
+
+def publish_mqtt_many(
+    messages: Iterable[MqttMessage],
+    default_client_id: str = "homelab-ha-discovery",
+) -> None:
+    message_list = list(messages)
+    if not message_list:
+        return
+
     import paho.mqtt.client as mqtt
 
     host = os.environ.get("HA_MQTT_HOST", DEFAULT_MQTT_HOST)
@@ -36,18 +52,6 @@ def publish_mqtt(
         if not username:
             raise ValueError("HA_MQTT_USERNAME is required when HA_MQTT_PASSWORD is set")
         client.username_pw_set(username, password)
-
-    print(
-        "MQTT Publish: "
-        f"host={host}, "
-        f"port={port} , "
-        f"topic={topic}, "
-        f"retain={retain}, "
-        f"username_set={bool(username)}, "
-        f"password_set={bool(password)}",
-    )
-    print("MQTT Payload: ")
-    print(payload)
 
     try:
         connect_result = client.connect(host, port, keepalive=MQTT_KEEPALIVE_SECONDS)
@@ -78,10 +82,24 @@ def publish_mqtt(
 
     try:
         client.loop_start()
-        publish_result = client.publish(topic, payload, retain=retain)
-        publish_result.wait_for_publish()
-        if publish_result.rc != mqtt.MQTT_ERR_SUCCESS:
-            raise RuntimeError(f"MQTT publish failed, return code: {publish_result.rc}")
+        for topic, payload, retain in message_list:
+            print(
+                "MQTT Publish: "
+                f"host={host}, "
+                f"port={port} , "
+                f"topic={topic}, "
+                f"retain={retain}, "
+                f"username_set={bool(username)}, "
+                f"password_set={bool(password)}",
+            )
+            print("MQTT Payload: ")
+            print(payload)
+            publish_result = client.publish(topic, payload, retain=retain)
+            publish_result.wait_for_publish()
+            if publish_result.rc != mqtt.MQTT_ERR_SUCCESS:
+                raise RuntimeError(
+                    f"MQTT publish failed, return code: {publish_result.rc}"
+                )
     except ConnectionRefusedError:
         print(f"Connection refused by MQTT host: {DEFAULT_MQTT_HOST}", file=sys.stderr)
         raise

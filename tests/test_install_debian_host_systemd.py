@@ -176,6 +176,56 @@ class InstallDebianHostSystemdTest(unittest.TestCase):
             ],
         )
 
+    def test_docker_container_unit_name_and_command(self) -> None:
+        paths = RuntimePaths(
+            app_dir=Path("/opt/homelab-ha-discovery"),
+            config_dir=Path("/etc/homelab-ha-discovery"),
+            systemd_dir=Path("/etc/systemd/system"),
+            source_root=Path("/checkout"),
+        )
+        service = {
+            "type": "docker_containers",
+            "enabled": True,
+            "timer": 60.0,
+            "include_label": "homelab-ha-discovery.enabled=true",
+            "include_labels": ["tier=media"],
+            "docker_command": "/usr/bin/docker",
+            "expire_after": 0,
+            "debug": True,
+        }
+
+        self.assertEqual(
+            service_unit_name("hpc", service),
+            "homelab-ha-discovery-hpc-docker-containers.service",
+        )
+
+        command = service_command(paths, "hpc", service, discovery_timer=60.0)
+        self.assertEqual(
+            command,
+            [
+                "/opt/homelab-ha-discovery/.venv/bin/python",
+                (
+                    "/opt/homelab-ha-discovery/src/homelab_ha_discovery/scripts/"
+                    "publish_docker_container_metrics.py"
+                ),
+                "--ha-device-id",
+                "hpc",
+                "--include-label",
+                "homelab-ha-discovery.enabled=true",
+                "--include-label",
+                "tier=media",
+                "--docker-command",
+                "/usr/bin/docker",
+                "--expire-after",
+                "0.0",
+                "--debug",
+                "--timer",
+                "60.0",
+                "--timer-publish-discovery-config",
+                "60.0",
+            ],
+        )
+
     def test_asus_router_network_unit_names_include_router_and_interface(self) -> None:
         left = {
             "type": "asus_router_network",
@@ -254,6 +304,63 @@ class InstallDebianHostSystemdTest(unittest.TestCase):
                     "ssh_ip": "<ip-addr>",
                     "ssh_port": 22,
                     "note": "disabled template; edit SSH settings and enable manually",
+                }
+            ],
+        )
+
+    def test_detected_config_includes_disabled_docker_template(self) -> None:
+        def command_exists(command: str) -> bool:
+            return command == "docker"
+
+        with (
+            patch(
+                "homelab_ha_discovery.scripts.install_debian_host_systemd."
+                "command_exists",
+                side_effect=command_exists,
+            ),
+            patch(
+                "homelab_ha_discovery.scripts.install_debian_host_systemd."
+                "command_has_output",
+                return_value=False,
+            ),
+            patch(
+                "homelab_ha_discovery.scripts.install_debian_host_systemd."
+                "detect_disk_devices",
+                return_value=[],
+            ),
+            patch(
+                "homelab_ha_discovery.scripts.install_debian_host_systemd."
+                "detect_nvme_devices",
+                return_value=[],
+            ),
+            patch(
+                "homelab_ha_discovery.scripts.install_debian_host_systemd."
+                "detect_network_interfaces",
+                return_value=[],
+            ),
+        ):
+            config = build_detected_config("hpc")
+
+        services = config["services"]
+        docker_entries = [
+            service
+            for service in services
+            if service["type"] == "docker_containers"
+        ]
+        self.assertEqual(
+            docker_entries,
+            [
+                {
+                    "type": "docker_containers",
+                    "enabled": False,
+                    "timer": 60.0,
+                    "include_label": "homelab-ha-discovery.enabled=true",
+                    "expire_after": None,
+                    "missing_requirements": [],
+                    "note": (
+                        "disabled template; enable manually after confirming "
+                        "Docker socket access"
+                    ),
                 }
             ],
         )

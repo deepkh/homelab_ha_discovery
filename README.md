@@ -10,7 +10,7 @@
 
 Python MQTT publishers for homelab metrics with Home Assistant MQTT discovery.
 
-The current runnable publishers collect metrics from the local Debian host and ASUS routers over SSH, then publish JSON payloads to MQTT. Normal runs publish retained Home Assistant discovery config first, then publish the current metric state. External systemd timer runs can use `--publisher-only` after discovery has already been registered. Long-running service mode is also available with `--timer SECONDS`.
+The current runnable publishers collect metrics from the local Debian host, local Docker containers, and ASUS routers over SSH, then publish JSON payloads to MQTT. Normal runs publish retained Home Assistant discovery config first, then publish the current metric state. External systemd timer runs can use `--publisher-only` after discovery has already been registered. Long-running service mode is also available with `--timer SECONDS`.
 
 For AI agent and repository maintenance rules, see [AGENTS.md](AGENTS.md).
 
@@ -21,6 +21,7 @@ For AI agent and repository maintenance rules, see [AGENTS.md](AGENTS.md).
 - `top` and `sensors` for CPU metrics publishing. On Debian, `sensors` is provided by `lm-sensors`.
 - `nvidia-smi` for NVIDIA GPU publishing
 - `smartctl` for disk and NVMe SMART publishing. On Debian, `smartctl` is provided by `smartmontools`.
+- Docker CLI access for Docker container publishing
 - `ssh` client access for ASUS router publishing
 - MQTT broker access
 
@@ -74,7 +75,7 @@ Supported environment variables:
 - `HA_MQTT_USERNAME`, optional MQTT username
 - `HA_MQTT_PASSWORD`, optional MQTT password
 - `HA_MQTT_CLIENT_ID`, optional MQTT client ID
-- `MQTT_TOPIC`, optional state-topic override
+- `MQTT_TOPIC`, optional state-topic override for publishers with one state topic
 
 Do not store MQTT credentials in this repository. For systemd services or timers, prefer an environment file outside the repo, for example `/etc/homelab-ha-discovery/mqtt.env`, readable only by the service user or root.
 
@@ -180,13 +181,39 @@ Generated units use `EnvironmentFile=-/etc/homelab-ha-discovery/mqtt.env`, but
 missing unless `--allow-missing-mqtt-env` is passed. The units run the existing
 publishers in long-running `--timer` mode. Default intervals are CPU and GPU
 `5.0` seconds, disk and NVMe SMART `60.0` seconds, network `1.0`
-second, ASUS router CPU `1.0` second, ASUS router network `1.0` second, and
-ASUS router connected clients `1.0` second.
+second, Docker containers `60.0` seconds, ASUS router CPU `1.0` second, ASUS
+router network `1.0` second, and ASUS router connected clients `1.0` second.
 Generated `host-metrics.json` also includes a top-level
 `timer_publish_discovery_config` default of `60.0`, so generated services
 republish retained Home Assistant discovery config every 60 seconds. Set it to
 `null` to disable that globally, or add `timer_publish_discovery_config` to an
 individual service entry to override it for that service.
+
+Detect/bootstrap also adds a disabled Docker container template entry:
+
+```json
+{
+  "type": "docker_containers",
+  "enabled": false,
+  "timer": 60.0,
+  "include_label": "homelab-ha-discovery.enabled=true",
+  "expire_after": null,
+  "missing_requirements": [],
+  "note": "disabled template; enable manually after confirming Docker socket access"
+}
+```
+
+The Docker entry uses label filtering by default so Home Assistant does not fill
+with temporary or internal containers. Remove `include_label` to publish all
+currently running containers, add `"all": true` to include stopped containers,
+add `docker_command` to use a non-default Docker CLI path, or add
+`"debug": true` to print Docker publisher progress into the service journal.
+The generated `"expire_after": null` keeps the timer-mode default of three
+times the service timer; set `"expire_after": 0` to disable expiry, or set
+another non-negative seconds value to override it.
+The service user must be able to read Docker state. Membership in the `docker`
+group is common, but Docker socket access is effectively root-equivalent and
+should be treated carefully.
 
 Detect/bootstrap also adds disabled ASUS router template entries without probing
 the router over SSH:
@@ -310,6 +337,59 @@ throughput state. Speeds are published in `Mbps`, where `Mbps` means megabits
 per second using 1,000,000 bits per second. Values are rounded to three decimal
 places; `0.001` means 1 Kbps and `1.000` means 1 Mbps.
 
+Docker container metrics:
+
+```bash
+python3 src/homelab_ha_discovery/scripts/publish_docker_container_metrics.py --ha-device-id hpc
+```
+
+The Docker container publisher runs local Docker CLI commands and dynamically
+enumerates currently running containers on each run. It publishes one Home
+Assistant discovery set and one state payload per included container, for
+example separate `plex`, `gitlab`, and `nginx` payloads. The container component
+is derived from the `homelab-ha-discovery.component` label when present,
+otherwise from the container name. Do not use container IDs as stable Home
+Assistant identity because they change when containers are recreated. If two
+containers resolve to the same component, the script exits before publishing.
+Discovery and state messages are batched through one MQTT connection per
+publish cycle.
+
+Recommended production mode is Docker label filtering:
+
+```bash
+python3 src/homelab_ha_discovery/scripts/publish_docker_container_metrics.py --ha-device-id hpc --include-label homelab-ha-discovery.enabled=true
+```
+
+`homelab-ha-discovery.enabled` is treated as a boolean opt-in label. Passing
+`--include-label homelab-ha-discovery.enabled` is equivalent to
+`--include-label homelab-ha-discovery.enabled=true`. Containers with
+`homelab-ha-discovery.enabled=false` are excluded, and passing
+`--include-label homelab-ha-discovery.enabled=false` exits with an error.
+
+Use `--all` to include stopped containers as well as running containers, and
+`--docker-command` to use a non-default Docker CLI path. Network speeds are
+computed from two `docker stats` samples and published in `Mbps`, where `Mbps`
+means megabits per second using 1,000,000 bits per second. Values are rounded
+to three decimal places. Docker network counter resets, such as after a
+container restart, report `0.0` speed for that interval.
+
+In timer mode, Docker discovery config sets `expire_after` to three times the
+timer by default, so Home Assistant marks stale container sensors unavailable
+after missed updates. For example, `--timer 60` defaults to `expire_after=180`.
+Use `--expire-after 0` for never expire, or pass another seconds value:
+
+```bash
+python3 src/homelab_ha_discovery/scripts/publish_docker_container_metrics.py --ha-device-id hpc --include-label homelab-ha-discovery.enabled=true --timer 60.0 --expire-after 0
+```
+
+Add `--debug` when troubleshooting. This prints timestamped sample counts,
+included containers, timer sleeps, discovery decisions, state topics, and
+payloads to stderr:
+
+```bash
+sudo /opt/homelab-ha-discovery/.venv/bin/python /opt/homelab-ha-discovery/src/homelab_ha_discovery/scripts/publish_docker_container_metrics.py --ha-device-id hpc --include-label homelab-ha-discovery.enabled=true --timer 60.0 --timer-publish-discovery-config 60.0 --debug
+```
+
 ASUS router CPU metrics:
 
 ```bash
@@ -380,6 +460,7 @@ python3 src/homelab_ha_discovery/scripts/publish_gpu_metrics.py --ha-device-id h
 python3 src/homelab_ha_discovery/scripts/publish_sdx_metrics.py --ha-device-id hpc --dev /dev/sda --publisher-only
 python3 src/homelab_ha_discovery/scripts/publish_nvme_metrics.py --ha-device-id hpc --dev /dev/nvme0 --publisher-only
 python3 src/homelab_ha_discovery/scripts/publish_network_metrics.py --ha-device-id hpc --dev ppp0 --publisher-only
+python3 src/homelab_ha_discovery/scripts/publish_docker_container_metrics.py --ha-device-id hpc --include-label homelab-ha-discovery.enabled=true --publisher-only
 python3 src/homelab_ha_discovery/scripts/publish_asus_router_cpu_metrics.py --ha-device-id hpc --router-name "ASUS AX86U" --ssh-user router-user --ssh-ip router-ip-address --publisher-only
 python3 src/homelab_ha_discovery/scripts/publish_asus_router_network_metrics.py --ha-device-id hpc --router-name "ASUS AX86U" --dev eth0 --ssh-user router-user --ssh-ip router-ip-address --publisher-only
 python3 src/homelab_ha_discovery/scripts/publish_asus_router_connected_clients_metrics.py --ha-device-id hpc --router-name "ASUS AX86U" --ssh-user router-user --ssh-ip router-ip-address --publisher-only
@@ -388,8 +469,9 @@ python3 src/homelab_ha_discovery/scripts/publish_asus_router_connected_clients_m
 For long-running service mode, use `--timer SECONDS`. Most publishers publish
 the first metric immediately, then sleep between publish attempts. Local
 network metrics establish a baseline first, wait one interval, then publish the
-first calculated speed. ASUS router network metrics perform their one-second
-remote sample during each publish attempt:
+first calculated speed. Docker container metrics also establish a baseline
+first and re-enumerate containers every interval. ASUS router network metrics
+perform their one-second remote sample during each publish attempt:
 
 ```bash
 python3 src/homelab_ha_discovery/scripts/publish_cpu_metrics.py --ha-device-id hpc --timer 5.0
@@ -397,16 +479,19 @@ python3 src/homelab_ha_discovery/scripts/publish_gpu_metrics.py --ha-device-id h
 python3 src/homelab_ha_discovery/scripts/publish_sdx_metrics.py --ha-device-id hpc --dev /dev/sda --timer 5.0
 python3 src/homelab_ha_discovery/scripts/publish_nvme_metrics.py --ha-device-id hpc --dev /dev/nvme0 --timer 5.0
 python3 src/homelab_ha_discovery/scripts/publish_network_metrics.py --ha-device-id hpc --dev ppp0 --timer 1.0
+python3 src/homelab_ha_discovery/scripts/publish_docker_container_metrics.py --ha-device-id hpc --include-label homelab-ha-discovery.enabled=true --timer 60.0
 python3 src/homelab_ha_discovery/scripts/publish_asus_router_cpu_metrics.py --ha-device-id hpc --router-name "ASUS AX86U" --ssh-user router-user --ssh-ip router-ip-address --timer 1.0
 python3 src/homelab_ha_discovery/scripts/publish_asus_router_network_metrics.py --ha-device-id hpc --router-name "ASUS AX86U" --dev eth0 --ssh-user router-user --ssh-ip router-ip-address --timer 1.0
 python3 src/homelab_ha_discovery/scripts/publish_asus_router_connected_clients_metrics.py --ha-device-id hpc --router-name "ASUS AX86U" --ssh-user router-user --ssh-ip router-ip-address --timer 1.0
 ```
 
 Without `--publisher-only`, `--timer` publishes discovery config once at
-startup, then publishes only metric state each interval. For local network
-metrics, the startup discovery config is published before the first calculated
-metric state after the baseline interval. With `--timer --publisher-only`, it
-publishes only metric state each interval.
+startup, then publishes only metric state each interval. For local network and
+Docker container metrics, the startup discovery config is published before the
+first calculated metric state after the baseline interval. Newly included
+Docker containers publish discovery config on the next timer interval and
+metric state after they have a previous network sample. With
+`--timer --publisher-only`, it publishes only metric state each interval.
 
 To republish retained discovery config periodically during long-running service mode, add `--timer-publish-discovery-config SECONDS`:
 
@@ -416,6 +501,7 @@ python3 src/homelab_ha_discovery/scripts/publish_gpu_metrics.py --ha-device-id h
 python3 src/homelab_ha_discovery/scripts/publish_sdx_metrics.py --ha-device-id hpc --dev /dev/sda --timer 5.0 --timer-publish-discovery-config 60.0
 python3 src/homelab_ha_discovery/scripts/publish_nvme_metrics.py --ha-device-id hpc --dev /dev/nvme0 --timer 5.0 --timer-publish-discovery-config 60.0
 python3 src/homelab_ha_discovery/scripts/publish_network_metrics.py --ha-device-id hpc --dev ppp0 --timer 1.0 --timer-publish-discovery-config 60.0
+python3 src/homelab_ha_discovery/scripts/publish_docker_container_metrics.py --ha-device-id hpc --include-label homelab-ha-discovery.enabled=true --timer 60.0 --timer-publish-discovery-config 60.0
 python3 src/homelab_ha_discovery/scripts/publish_asus_router_cpu_metrics.py --ha-device-id hpc --router-name "ASUS AX86U" --ssh-user router-user --ssh-ip router-ip-address --timer 1.0 --timer-publish-discovery-config 60.0
 python3 src/homelab_ha_discovery/scripts/publish_asus_router_network_metrics.py --ha-device-id hpc --router-name "ASUS AX86U" --dev eth0 --ssh-user router-user --ssh-ip router-ip-address --timer 1.0 --timer-publish-discovery-config 60.0
 python3 src/homelab_ha_discovery/scripts/publish_asus_router_connected_clients_metrics.py --ha-device-id hpc --router-name "ASUS AX86U" --ssh-user router-user --ssh-ip router-ip-address --timer 1.0 --timer-publish-discovery-config 60.0
@@ -636,8 +722,41 @@ use the network interface component, for example `hpc ppp0 Download Speed`.
 Because the interface component is included in Home Assistant unique IDs,
 changing `--dev` changes the entities.
 
-If `MQTT_TOPIC` is set, publishers use it as the state topic and discovery config
-points to that exact topic.
+With `--ha-device-id hpc`, Docker container metrics publish one state topic per
+included container. For a container named `plex`, the state topic is:
+
+```text
+homelab-ha-discovery/hpc/docker/plex/metrics
+```
+
+Payload:
+
+```json
+{"State":"running","Health":"healthy","Restart Count":2,"CPU Usage":2.318,"Memory Usage MB":512.4,"Memory Limit MB":8192.0,"Memory Usage Percent":6.25,"Download Speed":0.001,"Upload Speed":1.0}
+```
+
+Discovery topics:
+
+```text
+homeassistant/sensor/homelab_ha_discovery_hpc_docker_plex_state/config
+homeassistant/sensor/homelab_ha_discovery_hpc_docker_plex_health/config
+homeassistant/sensor/homelab_ha_discovery_hpc_docker_plex_restart_count/config
+homeassistant/sensor/homelab_ha_discovery_hpc_docker_plex_cpu_usage/config
+homeassistant/sensor/homelab_ha_discovery_hpc_docker_plex_memory_usage_mb/config
+homeassistant/sensor/homelab_ha_discovery_hpc_docker_plex_memory_limit_mb/config
+homeassistant/sensor/homelab_ha_discovery_hpc_docker_plex_memory_usage_percent/config
+homeassistant/sensor/homelab_ha_discovery_hpc_docker_plex_download_speed/config
+homeassistant/sensor/homelab_ha_discovery_hpc_docker_plex_upload_speed/config
+```
+
+If `plex`, `gitlab`, and `nginx` are included, each container gets its own
+state topic and discovery topics. Removed or renamed containers are not
+automatically deleted from Home Assistant; old retained discovery config should
+be cleaned up manually only when intended.
+
+If `MQTT_TOPIC` is set, publishers with one state topic use it as the state
+topic and discovery config points to that exact topic. Docker container metrics
+always use per-container state topics.
 
 Discovery config is retained. Metric state is non-retained by default.
 
@@ -660,6 +779,8 @@ python3 -m py_compile src/homelab_ha_discovery/collectors/nvme_smart.py
 python3 -m py_compile src/homelab_ha_discovery/scripts/publish_nvme_metrics.py
 python3 -m py_compile src/homelab_ha_discovery/collectors/network_linux.py
 python3 -m py_compile src/homelab_ha_discovery/scripts/publish_network_metrics.py
+python3 -m py_compile src/homelab_ha_discovery/collectors/docker_containers.py
+python3 -m py_compile src/homelab_ha_discovery/scripts/publish_docker_container_metrics.py
 python3 -m py_compile src/homelab_ha_discovery/collectors/router_asus_ssh.py
 python3 -m py_compile src/homelab_ha_discovery/scripts/publish_asus_router_cpu_metrics.py
 python3 -m py_compile src/homelab_ha_discovery/scripts/publish_asus_router_network_metrics.py
