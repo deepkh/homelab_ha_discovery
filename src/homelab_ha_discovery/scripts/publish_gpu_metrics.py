@@ -20,11 +20,13 @@ from homelab_ha_discovery.collectors.gpu_nvidia import (
 )
 from homelab_ha_discovery.discovery import (
     MetricIdentity,
+    effective_expire_after,
     mqtt_topic_prefix,
     sensor_discovery_config,
+    validate_expire_after_seconds,
 )
 from homelab_ha_discovery.env import load_env_files
-from homelab_ha_discovery.mqtt import publish_mqtt
+from homelab_ha_discovery.mqtt import MqttMessage, publish_mqtt_many
 from homelab_ha_discovery.scripts.timer import (
     run_publish_timer,
     validate_timer_seconds,
@@ -98,7 +100,26 @@ def publish_gpu_discovery(
     device: str,
     state_topic: str,
     metrics: GpuMetrics,
+    expire_after: float | None = None,
 ) -> None:
+    publish_mqtt_many(
+        gpu_discovery_messages(
+            device,
+            state_topic,
+            metrics,
+            expire_after=expire_after,
+        ),
+        default_client_id=gpu_metrics_client_id(device),
+    )
+
+
+def gpu_discovery_messages(
+    device: str,
+    state_topic: str,
+    metrics: GpuMetrics,
+    expire_after: float | None = None,
+) -> list[MqttMessage]:
+    messages: list[MqttMessage] = []
     for key in metrics:
         configs = (
             (
@@ -123,7 +144,13 @@ def publish_gpu_discovery(
                 f"{{{{ value_json['{key}']['Temperature'] }}}}",
             ),
         )
-        for identity, name, unit_of_measurement, device_class, value_template in configs:
+        for (
+            identity,
+            name,
+            unit_of_measurement,
+            device_class,
+            value_template,
+        ) in configs:
             payload = json.dumps(
                 sensor_discovery_config(
                     identity,
@@ -132,15 +159,12 @@ def publish_gpu_discovery(
                     device_class=device_class,
                     state_class="measurement",
                     value_template=value_template,
+                    expire_after=expire_after,
                 ),
                 separators=(",", ":"),
             )
-            publish_mqtt(
-                identity.discovery_topic,
-                payload,
-                default_client_id=gpu_metrics_client_id(device),
-                retain=True,
-            )
+            messages.append((identity.discovery_topic, payload, True))
+    return messages
 
 
 def publish_gpu_metrics(
@@ -149,6 +173,7 @@ def publish_gpu_metrics(
     default_mqtt_topic: str | None = None,
     gpu_index: int | None = None,
     publisher_only: bool = False,
+    expire_after: float | None = None,
 ) -> int:
     try:
         load_env_files(env_files)
@@ -158,13 +183,21 @@ def publish_gpu_metrics(
             default_mqtt_topic or identity.state_topic,
         )
         metrics = select_gpu_metrics(parse_gpu_metrics(run_nvidia_smi()), gpu_index)
+        mqtt_messages: list[MqttMessage] = []
         if not publisher_only:
-            publish_gpu_discovery(device, mqtt_topic, metrics)
+            mqtt_messages.extend(
+                gpu_discovery_messages(
+                    device,
+                    mqtt_topic,
+                    metrics,
+                    expire_after=expire_after,
+                )
+            )
 
         payload = json.dumps(metrics, separators=(",", ":"))
-        publish_mqtt(
-            mqtt_topic,
-            payload,
+        mqtt_messages.append((mqtt_topic, payload, False))
+        publish_mqtt_many(
+            mqtt_messages,
             default_client_id=gpu_metrics_client_id(device),
         )
     except Exception as exc:
@@ -191,6 +224,15 @@ def main(argv: list[str] | None = None) -> int:
         "--publisher-only",
         action="store_true",
         help="Publish metric state without Home Assistant discovery config.",
+    )
+    parser.add_argument(
+        "--expire-after",
+        type=float,
+        metavar="SECONDS",
+        help=(
+            "Set Home Assistant discovery expire_after. In timer mode the "
+            "default is timer*3. Use 0 to disable expiry."
+        ),
     )
     parser.add_argument(
         "--timer",
@@ -222,6 +264,10 @@ def main(argv: list[str] | None = None) -> int:
         "--timer-publish-discovery-config",
     ):
         return 1
+    if not validate_expire_after_seconds(args.expire_after):
+        return 1
+
+    expire_after = effective_expire_after(args.expire_after, args.timer)
 
     next_discovery_publish_at = 0.0 if not args.publisher_only else None
 
@@ -236,6 +282,7 @@ def main(argv: list[str] | None = None) -> int:
             args.device,
             gpu_index=args.gpu,
             publisher_only=not publish_discovery,
+            expire_after=expire_after,
         )
         if result == 0 and publish_discovery:
             if args.timer_publish_discovery_config is None:

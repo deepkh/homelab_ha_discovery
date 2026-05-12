@@ -24,11 +24,13 @@ from homelab_ha_discovery.collectors.router_asus_ssh import (
 )
 from homelab_ha_discovery.discovery import (
     MetricIdentity,
+    effective_expire_after,
     mqtt_topic_prefix,
     sensor_discovery_config,
+    validate_expire_after_seconds,
 )
 from homelab_ha_discovery.env import load_env_files
-from homelab_ha_discovery.mqtt import publish_mqtt
+from homelab_ha_discovery.mqtt import MqttMessage, publish_mqtt_many
 from homelab_ha_discovery.scripts.timer import (
     run_publish_timer,
     validate_timer_seconds,
@@ -101,9 +103,32 @@ def publish_asus_router_connected_clients_discovery(
     component: str,
     state_topic: str,
     debug: bool = False,
+    expire_after: float | None = None,
 ) -> None:
+    messages = asus_router_connected_clients_discovery_messages(
+        device,
+        router_name,
+        component,
+        state_topic,
+        expire_after=expire_after,
+        debug=debug,
+    )
+    publish_mqtt_many(
+        messages,
+        default_client_id=asus_router_connected_clients_client_id(device, component),
+    )
+
+
+def asus_router_connected_clients_discovery_messages(
+    device: str,
+    router_name: str,
+    component: str,
+    state_topic: str,
+    expire_after: float | None = None,
+    debug: bool = False,
+) -> list[MqttMessage]:
     identity = asus_router_connected_clients_identity(device, component, state_topic)
-    debug_log(debug, f"publishing discovery config to {identity.discovery_topic}")
+    debug_log(debug, f"queueing discovery config to {identity.discovery_topic}")
     payload = json.dumps(
         sensor_discovery_config(
             identity,
@@ -111,15 +136,11 @@ def publish_asus_router_connected_clients_discovery(
             unit_of_measurement="clients",
             state_class="measurement",
             value_template="{{ value_json | count }}",
+            expire_after=expire_after,
         ),
         separators=(",", ":"),
     )
-    publish_mqtt(
-        identity.discovery_topic,
-        payload,
-        default_client_id=asus_router_connected_clients_client_id(device, component),
-        retain=True,
-    )
+    return [(identity.discovery_topic, payload, True)]
 
 
 def publish_asus_router_connected_clients_metrics(
@@ -133,6 +154,7 @@ def publish_asus_router_connected_clients_metrics(
     default_mqtt_topic: str | None = None,
     publisher_only: bool = False,
     debug: bool = False,
+    expire_after: float | None = None,
 ) -> int:
     try:
         debug_log(debug, "loading MQTT environment files")
@@ -166,20 +188,28 @@ def publish_asus_router_connected_clients_metrics(
         clients = parse_asus_router_connected_clients(client_list_output)
         debug_log(debug, f"parsed connected clients: {len(clients)}")
 
+        mqtt_messages: list[MqttMessage] = []
         if not publisher_only:
-            publish_asus_router_connected_clients_discovery(
-                device,
-                router_name,
-                component,
-                mqtt_topic,
-                debug=debug,
+            mqtt_messages.extend(
+                asus_router_connected_clients_discovery_messages(
+                    device,
+                    router_name,
+                    component,
+                    mqtt_topic,
+                    expire_after=expire_after,
+                    debug=debug,
+                )
             )
 
         payload = json.dumps(clients, separators=(",", ":"))
-        debug_log(debug, f"publishing state payload to {mqtt_topic}: {payload}")
-        publish_mqtt(
-            mqtt_topic,
-            payload,
+        debug_log(debug, f"queueing state payload to {mqtt_topic}: {payload}")
+        mqtt_messages.append((mqtt_topic, payload, False))
+        debug_log(
+            debug,
+            f"publishing {len(mqtt_messages)} MQTT message(s) in one connection",
+        )
+        publish_mqtt_many(
+            mqtt_messages,
             default_client_id=asus_router_connected_clients_client_id(
                 device,
                 component,
@@ -233,6 +263,15 @@ def main(argv: list[str] | None = None) -> int:
         help="Publish metric state without Home Assistant discovery config.",
     )
     parser.add_argument(
+        "--expire-after",
+        type=float,
+        metavar="SECONDS",
+        help=(
+            "Set Home Assistant discovery expire_after. In timer mode the "
+            "default is timer*3. Use 0 to disable expiry."
+        ),
+    )
+    parser.add_argument(
         "--debug",
         action="store_true",
         help="Print progress messages to stderr while collecting and publishing.",
@@ -275,6 +314,10 @@ def main(argv: list[str] | None = None) -> int:
         "--timer-publish-discovery-config",
     ):
         return 1
+    if not validate_expire_after_seconds(args.expire_after):
+        return 1
+
+    expire_after = effective_expire_after(args.expire_after, args.timer)
 
     next_discovery_publish_at = 0.0 if not args.publisher_only else None
 
@@ -293,6 +336,7 @@ def main(argv: list[str] | None = None) -> int:
             ssh_port=args.ssh_port,
             client_list_command=args.client_list_command,
             publisher_only=not publish_discovery,
+            expire_after=expire_after,
             debug=args.debug,
         )
         if result == 0 and publish_discovery:

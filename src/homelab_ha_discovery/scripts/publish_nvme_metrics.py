@@ -20,11 +20,13 @@ from homelab_ha_discovery.collectors.nvme_smart import (
 )
 from homelab_ha_discovery.discovery import (
     MetricIdentity,
+    effective_expire_after,
     mqtt_topic_prefix,
     sensor_discovery_config,
+    validate_expire_after_seconds,
 )
 from homelab_ha_discovery.env import load_env_files
-from homelab_ha_discovery.mqtt import publish_mqtt
+from homelab_ha_discovery.mqtt import MqttMessage, publish_mqtt_many
 from homelab_ha_discovery.scripts.timer import (
     run_publish_timer,
     validate_timer_seconds,
@@ -74,7 +76,13 @@ def nvme_metrics_client_id(device: str, component: str) -> str:
     return f"homelab-ha-discovery_{device}_{component}_metrics"
 
 
-def publish_nvme_discovery(device: str, component: str, state_topic: str) -> None:
+def nvme_discovery_messages(
+    device: str,
+    component: str,
+    state_topic: str,
+    expire_after: float | None = None,
+) -> list[MqttMessage]:
+    messages: list[MqttMessage] = []
     configs = (
         (
             nvme_metric_identity(device, component, "critical_warning", state_topic),
@@ -152,15 +160,29 @@ def publish_nvme_discovery(device: str, component: str, state_topic: str) -> Non
                 device_class=device_class,
                 state_class="measurement",
                 value_template=value_template,
+                expire_after=expire_after,
             ),
             separators=(",", ":"),
         )
-        publish_mqtt(
-            identity.discovery_topic,
-            payload,
-            default_client_id=nvme_metrics_client_id(device, component),
-            retain=True,
-        )
+        messages.append((identity.discovery_topic, payload, True))
+    return messages
+
+
+def publish_nvme_discovery(
+    device: str,
+    component: str,
+    state_topic: str,
+    expire_after: float | None = None,
+) -> None:
+    publish_mqtt_many(
+        nvme_discovery_messages(
+            device,
+            component,
+            state_topic,
+            expire_after=expire_after,
+        ),
+        default_client_id=nvme_metrics_client_id(device, component),
+    )
 
 
 def publish_nvme_metrics(
@@ -169,6 +191,7 @@ def publish_nvme_metrics(
     dev: str,
     default_mqtt_topic: str | None = None,
     publisher_only: bool = False,
+    expire_after: float | None = None,
 ) -> int:
     try:
         load_env_files(env_files)
@@ -178,13 +201,21 @@ def publish_nvme_metrics(
             default_mqtt_topic or nvme_metrics_state_topic(device, component),
         )
         metrics = parse_nvme_smart_metrics(run_smartctl(dev))
+        mqtt_messages: list[MqttMessage] = []
         if not publisher_only:
-            publish_nvme_discovery(device, component, mqtt_topic)
+            mqtt_messages.extend(
+                nvme_discovery_messages(
+                    device,
+                    component,
+                    mqtt_topic,
+                    expire_after=expire_after,
+                )
+            )
 
         payload = json.dumps(metrics, separators=(",", ":"))
-        publish_mqtt(
-            mqtt_topic,
-            payload,
+        mqtt_messages.append((mqtt_topic, payload, False))
+        publish_mqtt_many(
+            mqtt_messages,
             default_client_id=nvme_metrics_client_id(device, component),
         )
     except Exception as exc:
@@ -209,6 +240,15 @@ def main(argv: list[str] | None = None) -> int:
         "--publisher-only",
         action="store_true",
         help="Publish metric state without Home Assistant discovery config.",
+    )
+    parser.add_argument(
+        "--expire-after",
+        type=float,
+        metavar="SECONDS",
+        help=(
+            "Set Home Assistant discovery expire_after. In timer mode the "
+            "default is timer*3. Use 0 to disable expiry."
+        ),
     )
     parser.add_argument(
         "--timer",
@@ -240,6 +280,10 @@ def main(argv: list[str] | None = None) -> int:
         "--timer-publish-discovery-config",
     ):
         return 1
+    if not validate_expire_after_seconds(args.expire_after):
+        return 1
+
+    expire_after = effective_expire_after(args.expire_after, args.timer)
 
     next_discovery_publish_at = 0.0 if not args.publisher_only else None
 
@@ -254,6 +298,7 @@ def main(argv: list[str] | None = None) -> int:
             args.device,
             args.dev,
             publisher_only=not publish_discovery,
+            expire_after=expire_after,
         )
         if result == 0 and publish_discovery:
             if args.timer_publish_discovery_config is None:

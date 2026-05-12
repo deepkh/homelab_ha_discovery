@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 from datetime import datetime
 import json
-import math
 from pathlib import Path
 import sys
 import time
@@ -23,8 +22,10 @@ from homelab_ha_discovery.collectors.docker_containers import (
 )
 from homelab_ha_discovery.discovery import (
     MetricIdentity,
+    effective_expire_after,
     mqtt_topic_prefix,
     sensor_discovery_config,
+    validate_expire_after_seconds,
 )
 from homelab_ha_discovery.env import load_env_files
 from homelab_ha_discovery.mqtt import MqttMessage, publish_mqtt_many
@@ -35,7 +36,6 @@ DEFAULT_ENV_FILES = (
     "/etc/homelab-ha-discovery/mqtt.env",
 )
 DEFAULT_SAMPLE_INTERVAL_SECONDS = 1.0
-DOCKER_EXPIRE_AFTER_TIMER_MULTIPLIER = 3.0
 
 
 def debug_log(debug: bool, message: str) -> None:
@@ -101,31 +101,6 @@ def docker_metrics_client_id(device: str, component: str | None = None) -> str:
     if component:
         return f"homelab-ha-discovery_{device}_docker_{component}_metrics"
     return f"homelab-ha-discovery_{device}_docker_metrics"
-
-
-def validate_expire_after_seconds(expire_after: float | None) -> bool:
-    if expire_after is not None and (
-        not math.isfinite(expire_after) or expire_after < 0
-    ):
-        print(
-            "Error: --expire-after must be a finite value greater than or equal to 0",
-            file=sys.stderr,
-        )
-        return False
-    return True
-
-
-def effective_expire_after(
-    expire_after: float | None,
-    timer: float | None,
-) -> float | None:
-    if expire_after == 0:
-        return None
-    if expire_after is not None:
-        return expire_after
-    if timer is None:
-        return None
-    return timer * DOCKER_EXPIRE_AFTER_TIMER_MULTIPLIER
 
 
 def docker_discovery_configs(
@@ -220,9 +195,8 @@ def docker_container_discovery_messages(
             unit_of_measurement=unit_of_measurement,
             state_class=state_class,
             value_template=value_template,
+            expire_after=expire_after,
         )
-        if expire_after is not None:
-            config["expire_after"] = int(math.ceil(expire_after))
         payload = json.dumps(
             config,
             separators=(",", ":"),

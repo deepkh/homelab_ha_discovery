@@ -20,11 +20,13 @@ from homelab_ha_discovery.collectors.network_linux import (
 )
 from homelab_ha_discovery.discovery import (
     MetricIdentity,
+    effective_expire_after,
     mqtt_topic_prefix,
     sensor_discovery_config,
+    validate_expire_after_seconds,
 )
 from homelab_ha_discovery.env import load_env_files
-from homelab_ha_discovery.mqtt import publish_mqtt
+from homelab_ha_discovery.mqtt import MqttMessage, publish_mqtt_many
 from homelab_ha_discovery.scripts.timer import validate_timer_seconds
 
 
@@ -71,7 +73,13 @@ def network_metrics_client_id(device: str, component: str) -> str:
     return f"homelab-ha-discovery_{device}_{component}_metrics"
 
 
-def publish_network_discovery(device: str, component: str, state_topic: str) -> None:
+def network_discovery_messages(
+    device: str,
+    component: str,
+    state_topic: str,
+    expire_after: float | None = None,
+) -> list[MqttMessage]:
+    messages: list[MqttMessage] = []
     configs = (
         (
             network_metric_identity(device, component, "download_speed", state_topic),
@@ -94,15 +102,29 @@ def publish_network_discovery(device: str, component: str, state_topic: str) -> 
                 unit_of_measurement=unit_of_measurement,
                 state_class="measurement",
                 value_template=value_template,
+                expire_after=expire_after,
             ),
             separators=(",", ":"),
         )
-        publish_mqtt(
-            identity.discovery_topic,
-            payload,
-            default_client_id=network_metrics_client_id(device, component),
-            retain=True,
-        )
+        messages.append((identity.discovery_topic, payload, True))
+    return messages
+
+
+def publish_network_discovery(
+    device: str,
+    component: str,
+    state_topic: str,
+    expire_after: float | None = None,
+) -> None:
+    publish_mqtt_many(
+        network_discovery_messages(
+            device,
+            component,
+            state_topic,
+            expire_after=expire_after,
+        ),
+        default_client_id=network_metrics_client_id(device, component),
+    )
 
 
 def publish_network_metrics_from_samples(
@@ -113,6 +135,7 @@ def publish_network_metrics_from_samples(
     current_sample: NetworkCounterSample,
     default_mqtt_topic: str | None = None,
     publisher_only: bool = False,
+    expire_after: float | None = None,
 ) -> int:
     try:
         metrics = calculate_network_speed_metrics(previous_sample, current_sample)
@@ -122,13 +145,21 @@ def publish_network_metrics_from_samples(
             "MQTT_TOPIC",
             default_mqtt_topic or network_metrics_state_topic(device, component),
         )
+        mqtt_messages: list[MqttMessage] = []
         if not publisher_only:
-            publish_network_discovery(device, component, mqtt_topic)
+            mqtt_messages.extend(
+                network_discovery_messages(
+                    device,
+                    component,
+                    mqtt_topic,
+                    expire_after=expire_after,
+                )
+            )
 
         payload = json.dumps(metrics, separators=(",", ":"))
-        publish_mqtt(
-            mqtt_topic,
-            payload,
+        mqtt_messages.append((mqtt_topic, payload, False))
+        publish_mqtt_many(
+            mqtt_messages,
             default_client_id=network_metrics_client_id(device, component),
         )
     except Exception as exc:
@@ -144,6 +175,7 @@ def publish_network_metrics(
     dev: str,
     default_mqtt_topic: str | None = None,
     publisher_only: bool = False,
+    expire_after: float | None = None,
 ) -> int:
     try:
         previous_sample = read_network_counter_sample(dev)
@@ -161,6 +193,7 @@ def publish_network_metrics(
         current_sample,
         default_mqtt_topic=default_mqtt_topic,
         publisher_only=publisher_only,
+        expire_after=expire_after,
     )
 
 
@@ -170,6 +203,7 @@ def run_network_publish_timer(
     dev: str,
     publisher_only: bool = False,
     timer_publish_discovery_config: float | None = None,
+    expire_after: float | None = None,
 ) -> int:
     next_discovery_publish_at = 0.0 if not publisher_only else None
     try:
@@ -188,6 +222,7 @@ def run_network_publish_timer(
                 previous_sample,
                 current_sample,
                 publisher_only=not publish_discovery,
+                expire_after=expire_after,
             )
             if result != 0:
                 return result
@@ -223,6 +258,15 @@ def main(argv: list[str] | None = None) -> int:
         help="Publish metric state without Home Assistant discovery config.",
     )
     parser.add_argument(
+        "--expire-after",
+        type=float,
+        metavar="SECONDS",
+        help=(
+            "Set Home Assistant discovery expire_after. In timer mode the "
+            "default is timer*3. Use 0 to disable expiry."
+        ),
+    )
+    parser.add_argument(
         "--timer",
         type=float,
         help="Publish continuously every SECONDS instead of exiting after one run.",
@@ -254,6 +298,10 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     if not validate_timer_seconds(args.timer, "--timer"):
         return 1
+    if not validate_expire_after_seconds(args.expire_after):
+        return 1
+
+    expire_after = effective_expire_after(args.expire_after, args.timer)
 
     if args.timer is not None:
         return run_network_publish_timer(
@@ -262,6 +310,7 @@ def main(argv: list[str] | None = None) -> int:
             args.dev,
             publisher_only=args.publisher_only,
             timer_publish_discovery_config=args.timer_publish_discovery_config,
+            expire_after=expire_after,
         )
 
     return publish_network_metrics(
@@ -269,6 +318,7 @@ def main(argv: list[str] | None = None) -> int:
         args.device,
         args.dev,
         publisher_only=args.publisher_only,
+        expire_after=expire_after,
     )
 
 

@@ -216,11 +216,45 @@ class InstallDebianHostSystemdTest(unittest.TestCase):
                 "tier=media",
                 "--docker-command",
                 "/usr/bin/docker",
+                "--debug",
                 "--expire-after",
                 "0.0",
-                "--debug",
                 "--timer",
                 "60.0",
+                "--timer-publish-discovery-config",
+                "60.0",
+            ],
+        )
+
+    def test_expire_after_is_generic_service_option(self) -> None:
+        paths = RuntimePaths(
+            app_dir=Path("/opt/homelab-ha-discovery"),
+            config_dir=Path("/etc/homelab-ha-discovery"),
+            systemd_dir=Path("/etc/systemd/system"),
+            source_root=Path("/checkout"),
+        )
+        service = {
+            "type": "cpu",
+            "enabled": True,
+            "timer": 5.0,
+            "expire_after": 0,
+        }
+
+        command = service_command(paths, "hpc", service, discovery_timer=60.0)
+        self.assertEqual(
+            command,
+            [
+                "/opt/homelab-ha-discovery/.venv/bin/python",
+                (
+                    "/opt/homelab-ha-discovery/src/homelab_ha_discovery/scripts/"
+                    "publish_cpu_metrics.py"
+                ),
+                "--ha-device-id",
+                "hpc",
+                "--expire-after",
+                "0.0",
+                "--timer",
+                "5.0",
                 "--timer-publish-discovery-config",
                 "60.0",
             ],
@@ -298,6 +332,7 @@ class InstallDebianHostSystemdTest(unittest.TestCase):
                     "type": "asus_router_network",
                     "enabled": False,
                     "timer": 1.0,
+                    "expire_after": None,
                     "router_name": "ASUS AX86U",
                     "dev": "eth0",
                     "ssh_user": "<user>",
@@ -354,8 +389,8 @@ class InstallDebianHostSystemdTest(unittest.TestCase):
                     "type": "docker_containers",
                     "enabled": False,
                     "timer": 60.0,
-                    "include_label": "homelab-ha-discovery.enabled=true",
                     "expire_after": None,
+                    "include_label": "homelab-ha-discovery.enabled=true",
                     "missing_requirements": [],
                     "note": (
                         "disabled template; enable manually after confirming "

@@ -358,6 +358,7 @@ def service_entry(
         "timer": DEFAULT_TIMERS[service_type],
     }
     entry.update(values)
+    entry.setdefault("expire_after", None)
     return entry
 
 
@@ -726,18 +727,6 @@ def service_command(
                     require_string(service.get("docker_command"), "docker_command"),
                 ]
             )
-        if service.get("expire_after") is not None:
-            command.extend(
-                [
-                    "--expire-after",
-                    str(
-                        require_non_negative_seconds(
-                            service.get("expire_after"),
-                            "expire_after",
-                        )
-                    ),
-                ]
-            )
         if service.get("debug"):
             command.append("--debug")
     if service_type == "asus_router_network":
@@ -805,6 +794,18 @@ def service_command(
                     require_string(service.get("network_command"), "network_command"),
                 ]
             )
+    if service.get("expire_after") is not None:
+        command.extend(
+            [
+                "--expire-after",
+                str(
+                    require_non_negative_seconds(
+                        service.get("expire_after"),
+                        "expire_after",
+                    )
+                ),
+            ]
+        )
     command.extend(["--timer", str(timer)])
 
     if discovery_timer is not None:

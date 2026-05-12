@@ -10,7 +10,7 @@
 
 Python MQTT publishers for homelab metrics with Home Assistant MQTT discovery.
 
-The current runnable publishers collect metrics from the local Debian host, local Docker containers, and ASUS routers over SSH, then publish JSON payloads to MQTT. Normal runs publish retained Home Assistant discovery config first, then publish the current metric state. External systemd timer runs can use `--publisher-only` after discovery has already been registered. Long-running service mode is also available with `--timer SECONDS`.
+The current runnable publishers collect metrics from the local Debian host, local Docker containers, and ASUS routers over SSH, then publish JSON payloads to MQTT. Normal runs publish retained Home Assistant discovery config first, then publish the current metric state through one MQTT connection per publish cycle. External systemd timer runs can use `--publisher-only` after discovery has already been registered. Long-running service mode is also available with `--timer SECONDS`.
 
 For AI agent and repository maintenance rules, see [AGENTS.md](AGENTS.md).
 
@@ -189,6 +189,12 @@ republish retained Home Assistant discovery config every 60 seconds. Set it to
 `null` to disable that globally, or add `timer_publish_discovery_config` to an
 individual service entry to override it for that service.
 
+Any service entry may include `expire_after` to set Home Assistant discovery
+expiry for that publisher. `null` or an omitted value keeps the publisher
+default: timer-mode services set `expire_after` to three times their `timer`,
+while one-shot manual runs do not set expiry by default. Set `expire_after` to
+`0` to omit expiry, or to another non-negative seconds value to override it.
+
 Detect/bootstrap also adds a disabled Docker container template entry:
 
 ```json
@@ -208,9 +214,9 @@ with temporary or internal containers. Remove `include_label` to publish all
 currently running containers, add `"all": true` to include stopped containers,
 add `docker_command` to use a non-default Docker CLI path, or add
 `"debug": true` to print Docker publisher progress into the service journal.
-The generated `"expire_after": null` keeps the timer-mode default of three
-times the service timer; set `"expire_after": 0` to disable expiry, or set
-another non-negative seconds value to override it.
+The generated `"expire_after": null` keeps the generic timer-mode default of
+three times the service timer; set `"expire_after": 0` to disable expiry, or
+set another non-negative seconds value to override it.
 The service user must be able to read Docker state. Membership in the `docker`
 group is common, but Docker socket access is effectively root-equivalent and
 should be treated carefully.
@@ -280,6 +286,13 @@ used in MQTT topics, Home Assistant unique IDs, device identifiers, and sensor
 names. Keep it stable to avoid duplicate Home Assistant entities. `--dev` is
 separate and still names the disk path, NVMe controller path, or network
 interface component where a publisher needs one.
+
+All publishers that create Home Assistant discovery config accept
+`--expire-after SECONDS`. It only affects discovery config. In one-shot mode,
+the default is no expiry. In `--timer` mode, omitted `--expire-after` defaults
+to three times the timer value, for example `--timer 60` sets
+`expire_after=180`. Use `--expire-after 0` to omit expiry, or pass another
+non-negative seconds value to override it.
 
 CPU metrics:
 
@@ -373,10 +386,10 @@ means megabits per second using 1,000,000 bits per second. Values are rounded
 to three decimal places. Docker network counter resets, such as after a
 container restart, report `0.0` speed for that interval.
 
-In timer mode, Docker discovery config sets `expire_after` to three times the
-timer by default, so Home Assistant marks stale container sensors unavailable
-after missed updates. For example, `--timer 60` defaults to `expire_after=180`.
-Use `--expire-after 0` for never expire, or pass another seconds value:
+Docker follows the same `--expire-after` behavior as the other publishers, so
+Home Assistant can mark stale container sensors unavailable after missed
+updates. Use `--expire-after 0` for never expire, or pass another seconds
+value:
 
 ```bash
 python3 src/homelab_ha_discovery/scripts/publish_docker_container_metrics.py --ha-device-id hpc --include-label homelab-ha-discovery.enabled=true --timer 60.0 --expire-after 0
@@ -491,7 +504,9 @@ Docker container metrics, the startup discovery config is published before the
 first calculated metric state after the baseline interval. Newly included
 Docker containers publish discovery config on the next timer interval and
 metric state after they have a previous network sample. With
-`--timer --publisher-only`, it publishes only metric state each interval.
+`--timer --publisher-only`, it publishes only metric state each interval. When
+`--expire-after` is omitted, timer-mode discovery config sets `expire_after` to
+three times the timer value.
 
 To republish retained discovery config periodically during long-running service mode, add `--timer-publish-discovery-config SECONDS`:
 
@@ -758,7 +773,9 @@ If `MQTT_TOPIC` is set, publishers with one state topic use it as the state
 topic and discovery config points to that exact topic. Docker container metrics
 always use per-container state topics.
 
-Discovery config is retained. Metric state is non-retained by default.
+Discovery config is retained. Metric state is non-retained by default. Each
+publish cycle uses one MQTT connection for the queued discovery and state
+messages.
 
 ## Development
 
@@ -768,6 +785,7 @@ Relevant validation commands:
 
 ```bash
 python3 -m py_compile src/homelab_ha_discovery/mqtt.py
+python3 -m py_compile src/homelab_ha_discovery/discovery.py
 python3 -m py_compile src/homelab_ha_discovery/scripts/timer.py
 python3 -m py_compile src/homelab_ha_discovery/collectors/cpu_sensors.py
 python3 -m py_compile src/homelab_ha_discovery/scripts/publish_cpu_metrics.py

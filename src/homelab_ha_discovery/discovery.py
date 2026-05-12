@@ -3,15 +3,59 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 import os
+import sys
 
 
 DEFAULT_TOPIC_PREFIX = "homelab-ha-discovery"
 DEFAULT_OBJECT_ID_PREFIX = "homelab_ha_discovery"
+DISCOVERY_EXPIRE_AFTER_TIMER_MULTIPLIER = 3.0
 
 
 def mqtt_topic_prefix() -> str:
     return os.environ.get("HA_MQTT_TOPIC_PREFIX", DEFAULT_TOPIC_PREFIX).strip("/")
+
+
+def validate_expire_after_seconds(
+    expire_after: float | None,
+    argument: str = "--expire-after",
+) -> bool:
+    """Return whether an expire_after argument is unset or finite non-negative."""
+    if expire_after is not None and (
+        not math.isfinite(expire_after) or expire_after < 0
+    ):
+        print(
+            f"Error: {argument} must be a finite value greater than or equal to 0",
+            file=sys.stderr,
+        )
+        return False
+    return True
+
+
+def effective_expire_after(
+    expire_after: float | None,
+    timer: float | None,
+) -> float | None:
+    """Return the discovery expiry to write, or None when expiry is disabled."""
+    if expire_after == 0:
+        return None
+    if expire_after is not None:
+        return expire_after
+    if timer is None:
+        return None
+    return timer * DISCOVERY_EXPIRE_AFTER_TIMER_MULTIPLIER
+
+
+def discovery_expire_after_config_value(expire_after: float | None) -> int | None:
+    """Return the integer Home Assistant expire_after value, or None to omit it."""
+    if expire_after is None or expire_after == 0:
+        return None
+    if not math.isfinite(expire_after) or expire_after < 0:
+        raise ValueError(
+            "expire_after must be a finite value greater than or equal to 0"
+        )
+    return int(math.ceil(expire_after))
 
 
 @dataclass(frozen=True)
@@ -64,6 +108,7 @@ def sensor_discovery_config(
     device_class: str | None = None,
     state_class: str | None = None,
     value_template: str | None = None,
+    expire_after: float | None = None,
 ) -> dict[str, object]:
     config: dict[str, object] = {
         "name": name,
@@ -82,4 +127,7 @@ def sensor_discovery_config(
         config["state_class"] = state_class
     if value_template:
         config["value_template"] = value_template
+    expire_after_config = discovery_expire_after_config_value(expire_after)
+    if expire_after_config is not None:
+        config["expire_after"] = expire_after_config
     return config
