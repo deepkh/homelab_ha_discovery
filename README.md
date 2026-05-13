@@ -10,9 +10,9 @@
 
 Expose homelab infrastructure metrics as Home Assistant MQTT entities automatically.
 
-This project collects metrics from Debian hosts, Docker containers, Frigate, NVIDIA GPUs,
-SMART disks/NVMe devices, Linux network interfaces, and ASUS routers, then publishes
-Home Assistant MQTT discovery config plus metric state.
+This project collects metrics from Debian hosts, Docker containers, Frigate, NVIDIA and
+AMD ROCm GPUs, SMART disks/NVMe devices, Linux network interfaces, and ASUS routers,
+then publishes Home Assistant MQTT discovery config plus metric state.
 
 ## Why this project?
 
@@ -53,7 +53,7 @@ by hand is repetitive.
 | Area | Examples |
 |---|---|
 | CPU | usage, temperature |
-| NVIDIA GPU | usage, memory usage, temperature |
+| GPU | NVIDIA/AMD ROCm usage, memory usage, temperature |
 | Disk SMART | power-on hours, temperature, reallocated/pending sectors |
 | NVMe SMART | warning, spare, percentage used, temperature, written TB |
 | Network | download/upload speed |
@@ -67,7 +67,8 @@ by hand is repetitive.
 - MQTT broker reachable by Home Assistant
 - Home Assistant MQTT integration enabled
 - Linux host for most local collectors
-- Optional: Docker, Frigate, NVIDIA tools, smartmontools, ASUS router SSH access
+- Optional: Docker, Frigate, NVIDIA tools, AMD ROCm `rocm-smi`,
+  smartmontools, ASUS router SSH access
 
 ## Quick start
 

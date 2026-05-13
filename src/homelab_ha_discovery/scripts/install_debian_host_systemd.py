@@ -41,6 +41,18 @@ DEFAULT_TIMERS = {
 DEFAULT_TIMER_PUBLISH_DISCOVERY_CONFIG = 60.0
 DEFAULT_FRIGATE_METRICS_URL = "http://127.0.0.1:5000/api/metrics"
 FRIGATE_DETECT_TIMEOUT_SECONDS = 2.0
+DEFAULT_GPU_COLLECTOR = "nvidia"
+GPU_COLLECTOR_ALIASES = {
+    "nvidia": "nvidia",
+    "amd": "amd_rocm",
+    "rocm": "amd_rocm",
+    "amd_rocm": "amd_rocm",
+    "amd-rocm": "amd_rocm",
+}
+GPU_COLLECTOR_LABELS = {
+    "nvidia": "NVIDIA",
+    "amd_rocm": "AMD ROCm",
+}
 SCRIPT_BY_SERVICE_TYPE = {
     "cpu": "publish_cpu_metrics.py",
     "gpu": "publish_gpu_metrics.py",
@@ -247,7 +259,7 @@ def command_exists(command: str) -> bool:
     return shutil.which(command) is not None
 
 
-def command_has_output(command: list[str], timeout: float = 5.0) -> bool:
+def command_output(command: list[str], timeout: float = 5.0) -> str:
     try:
         result = subprocess.run(
             command,
@@ -257,8 +269,74 @@ def command_has_output(command: list[str], timeout: float = 5.0) -> bool:
             timeout=timeout,
         )
     except (OSError, subprocess.TimeoutExpired):
-        return False
-    return result.returncode == 0 and bool(result.stdout.strip())
+        return ""
+    if result.returncode != 0:
+        return ""
+    return result.stdout.strip()
+
+
+def command_has_output(command: list[str], timeout: float = 5.0) -> bool:
+    return bool(command_output(command, timeout=timeout))
+
+
+def normalize_gpu_collector(value: object) -> str:
+    if value is None:
+        return DEFAULT_GPU_COLLECTOR
+    if not isinstance(value, str) or not value.strip():
+        raise RuntimeError("gpu collector must be a non-empty string")
+    normalized = value.strip().lower().replace("-", "_")
+    if normalized not in GPU_COLLECTOR_ALIASES:
+        choices = ", ".join(sorted(GPU_COLLECTOR_ALIASES))
+        raise RuntimeError(
+            f"unsupported gpu collector: {value}; expected one of {choices}"
+        )
+    return GPU_COLLECTOR_ALIASES[normalized]
+
+
+def parse_nvidia_gpu_indexes(output: str) -> list[int]:
+    indexes: list[int] = []
+    for line in output.splitlines():
+        match = re.match(r"\s*GPU\s+(\d+):", line)
+        if match is not None:
+            indexes.append(int(match.group(1)))
+    return sorted(set(indexes))
+
+
+def detect_nvidia_gpu_indexes() -> list[int]:
+    if not command_exists("nvidia-smi"):
+        return []
+    return parse_nvidia_gpu_indexes(command_output(["nvidia-smi", "-L"]))
+
+
+def parse_amd_rocm_gpu_indexes(output: str) -> list[int]:
+    try:
+        data = json.loads(output)
+    except json.JSONDecodeError:
+        data = None
+
+    indexes: set[int] = set()
+    if isinstance(data, dict):
+        for key, value in data.items():
+            if not isinstance(key, str) or not isinstance(value, dict):
+                continue
+            match = re.match(r"\s*(?:card|gpu)(\d+)\s*$", key, re.IGNORECASE)
+            if match is not None:
+                indexes.add(int(match.group(1)))
+        return sorted(indexes)
+
+    for line in output.splitlines():
+        match = re.search(r"(?:GPU|card)\s*\[?(\d+)\]?", line, re.IGNORECASE)
+        if match is not None:
+            indexes.add(int(match.group(1)))
+    return sorted(indexes)
+
+
+def detect_amd_rocm_gpu_indexes() -> list[int]:
+    if not command_exists("rocm-smi"):
+        return []
+    return parse_amd_rocm_gpu_indexes(
+        command_output(["rocm-smi", "--showproductname", "--json"])
+    )
 
 
 def http_url_reachable(
@@ -396,17 +474,48 @@ def build_detected_config(device: str) -> dict[str, Any]:
         )
     )
 
-    gpu_available = command_exists("nvidia-smi") and command_has_output(
-        ["nvidia-smi", "-L"]
-    )
+    nvidia_exists = command_exists("nvidia-smi")
+    nvidia_indexes = detect_nvidia_gpu_indexes() if nvidia_exists else []
+    nvidia_values: dict[str, Any] = {
+        "collector": "nvidia",
+        "missing_requirements": [] if nvidia_exists else ["nvidia-smi"],
+        "note": (
+            "publishes selected NVIDIA GPUs in one timer loop"
+            if nvidia_indexes
+            else "disabled template; enable after NVIDIA tooling detects GPUs"
+        ),
+    }
+    if nvidia_indexes:
+        nvidia_values["gpu_indexes"] = nvidia_indexes
     services.append(
         service_entry(
             "gpu",
-            gpu_available,
-            missing_requirements=[] if command_exists("nvidia-smi") else ["nvidia-smi"],
-            note="publishes all detected NVIDIA GPUs",
+            bool(nvidia_indexes),
+            **nvidia_values,
         )
     )
+
+    amd_rocm_exists = command_exists("rocm-smi")
+    amd_rocm_indexes = detect_amd_rocm_gpu_indexes() if amd_rocm_exists else []
+    if amd_rocm_exists:
+        amd_rocm_values: dict[str, Any] = {
+            "collector": "amd_rocm",
+            "missing_requirements": [],
+            "note": (
+                "publishes selected AMD ROCm GPUs in one timer loop"
+                if amd_rocm_indexes
+                else "disabled template; enable after rocm-smi detects GPUs"
+            ),
+        }
+        if amd_rocm_indexes:
+            amd_rocm_values["gpu_indexes"] = amd_rocm_indexes
+        services.append(
+            service_entry(
+                "gpu",
+                bool(amd_rocm_indexes),
+                **amd_rocm_values,
+            )
+        )
 
     smart_missing = [
         command
@@ -612,6 +721,40 @@ def docker_include_labels(service: dict[str, Any]) -> list[str]:
     return labels
 
 
+def require_gpu_index(value: object, name: str) -> int:
+    try:
+        index = int(value)
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError(f"{name} must be an integer") from exc
+    if isinstance(value, float) and not value.is_integer():
+        raise RuntimeError(f"{name} must be an integer")
+    if index < 0:
+        raise RuntimeError(f"{name} must be zero or greater")
+    return index
+
+
+def gpu_indexes_for_service(service: dict[str, Any]) -> list[int]:
+    has_gpu_index = service.get("gpu_index") is not None
+    has_gpu_indexes = service.get("gpu_indexes") is not None
+    if has_gpu_index and has_gpu_indexes:
+        raise RuntimeError("gpu service cannot set both gpu_index and gpu_indexes")
+    if has_gpu_index:
+        return [require_gpu_index(service.get("gpu_index"), "gpu_index")]
+    if not has_gpu_indexes:
+        return []
+
+    values = service.get("gpu_indexes")
+    if not isinstance(values, list) or not values:
+        raise RuntimeError("gpu_indexes must be a non-empty list")
+
+    indexes: list[int] = []
+    for index, value in enumerate(values):
+        gpu_index = require_gpu_index(value, f"gpu_indexes[{index}]")
+        if gpu_index not in indexes:
+            indexes.append(gpu_index)
+    return indexes
+
+
 def discovery_timer_for_service(
     config: dict[str, Any],
     service: dict[str, Any],
@@ -649,10 +792,16 @@ def service_component(service: dict[str, Any]) -> str:
     if service_type == "cpu":
         return "cpu"
     if service_type == "gpu":
-        gpu_index = service.get("gpu_index")
-        if gpu_index is None:
-            return "gpu"
-        return f"gpu{gpu_index}"
+        collector = normalize_gpu_collector(service.get("collector"))
+        indexes = gpu_indexes_for_service(service)
+        gpu_component = (
+            "gpu"
+            if not indexes
+            else "-".join(f"gpu{gpu_index}" for gpu_index in indexes)
+        )
+        if collector == "nvidia":
+            return gpu_component
+        return f"{GPU_COLLECTOR_LABELS[collector]} {gpu_component}"
     if service_type in {"disk_smart", "nvme_smart"}:
         return Path(require_string(service.get("dev"), f"{service_type} dev")).name
     if service_type == "network":
@@ -706,7 +855,11 @@ def service_description(device: str, service: dict[str, Any]) -> str:
     if service_type == "cpu":
         return f"Homelab HA Discovery CPU metrics for {device}"
     if service_type == "gpu":
-        return f"Homelab HA Discovery NVIDIA GPU metrics for {device}"
+        collector = normalize_gpu_collector(service.get("collector"))
+        return (
+            "Homelab HA Discovery "
+            f"{GPU_COLLECTOR_LABELS[collector]} GPU metrics for {device}"
+        )
     if service_type == "disk_smart":
         return f"Homelab HA Discovery disk SMART metrics for {device} {component}"
     if service_type == "nvme_smart":
@@ -750,8 +903,12 @@ def service_command(
         "--ha-device-id",
         device,
     ]
-    if service_type == "gpu" and service.get("gpu_index") is not None:
-        command.extend(["--gpu", str(service["gpu_index"])])
+    if service_type == "gpu":
+        collector = normalize_gpu_collector(service.get("collector"))
+        if collector != DEFAULT_GPU_COLLECTOR:
+            command.extend(["--collector", collector])
+        for gpu_index in gpu_indexes_for_service(service):
+            command.extend(["--gpu", str(gpu_index)])
     if service_type in {"disk_smart", "nvme_smart", "network"}:
         command.extend(["--dev", require_string(service.get("dev"), "dev")])
     if service_type == "docker_containers":

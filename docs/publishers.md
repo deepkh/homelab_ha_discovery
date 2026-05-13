@@ -45,6 +45,33 @@ Timer mode usually:
 3. publishes state payloads every cycle
 4. periodically republishes discovery config when configured
 
+## GPU publisher
+
+`publish_gpu_metrics.py` is shared by the GPU collectors.
+
+Backends:
+
+- `--collector nvidia` reads NVIDIA metrics from `nvidia-smi`
+- `--collector amd_rocm` reads AMD ROCm metrics from `rocm-smi`
+
+Published metrics per GPU card:
+
+- GPU usage percent
+- memory usage percent
+- temperature in Celsius
+
+Examples:
+
+```bash
+python3 src/homelab_ha_discovery/scripts/publish_gpu_metrics.py --ha-device-id hpc
+python3 src/homelab_ha_discovery/scripts/publish_gpu_metrics.py --ha-device-id hpc --collector amd_rocm
+python3 src/homelab_ha_discovery/scripts/publish_gpu_metrics.py --ha-device-id hpc --gpu 0 --gpu 1
+```
+
+When `--gpu` is repeated, the selected cards are collected and published in one
+state payload for that timer cycle. Without `--gpu`, the publisher publishes all
+cards returned by the selected collector.
+
 ## Adding a publisher
 
 Recommended structure:

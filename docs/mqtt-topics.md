@@ -38,6 +38,18 @@ General expectation:
 
 Check the existing publisher before changing a topic.
 
+GPU examples:
+
+```text
+homelab-ha-discovery/gpu/usages/<device>
+homelab-ha-discovery/gpu/usages/<device>/gpu0
+homelab-ha-discovery/gpu/amd_rocm/usages/<device>
+homelab-ha-discovery/gpu/amd_rocm/usages/<device>/gpu0
+```
+
+NVIDIA keeps the original GPU topic shape. AMD ROCm includes the collector name
+to avoid collisions when a host publishes multiple GPU backends.
+
 ## Stability rule
 
 Do not casually change:

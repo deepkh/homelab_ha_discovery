@@ -10,6 +10,10 @@ Bootstrap config files:
 sudo python3 src/homelab_ha_discovery/scripts/install_debian_host_systemd.py bootstrap --ha-device-id hpc
 ```
 
+Bootstrap detects local GPU tooling and writes GPU service entries to
+`host-metrics.json` when available. NVIDIA uses `nvidia-smi`; AMD ROCm uses
+`rocm-smi`.
+
 Edit generated config:
 
 ```bash
@@ -55,3 +59,4 @@ sudo python3 /opt/homelab-ha-discovery/src/homelab_ha_discovery/scripts/install_
 - Keep secrets in `/etc/homelab-ha-discovery/mqtt.env`.
 - Do not commit generated local config files with real credentials.
 - Prefer checking one service first before enabling all services.
+- GPU services may use `gpu_indexes` to publish multiple cards from one timer loop.

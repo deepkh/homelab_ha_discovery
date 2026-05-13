@@ -57,6 +57,16 @@ nvidia-smi
 
 If `nvidia-smi` fails, fix the NVIDIA driver/tooling first.
 
+## AMD ROCm metrics missing
+
+Check:
+
+```bash
+rocm-smi --showproductname --showuse --showmemuse --showtemp --json
+```
+
+If `rocm-smi` fails or returns no cards, fix the AMD ROCm driver/tooling first.
+
 ## Router metrics missing
 
 Check:
