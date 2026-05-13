@@ -3,1628 +3,214 @@
 from __future__ import annotations
 
 import argparse
-from dataclasses import dataclass
-from datetime import datetime, timezone
-import json
-import math
-import pwd
+from contextlib import contextmanager
 from pathlib import Path
-import re
-import shlex
 import shutil
-import subprocess
 import sys
-import urllib.error
-import urllib.request
-from typing import Any
 
+if __package__ in {None, ""}:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-DEFAULT_APP_DIR = Path("/opt/homelab-ha-discovery")
-DEFAULT_CONFIG_DIR = Path("/etc/homelab-ha-discovery")
-DEFAULT_SYSTEMD_DIR = Path("/etc/systemd/system")
-CONFIG_FILENAME = "host-metrics.json"
-MQTT_ENV_FILENAME = "mqtt.env"
-SKIP_ENV_FILES_ENV = "HOMELAB_HA_DISCOVERY_SKIP_ENV_FILES"
-SERVICE_PREFIX = "homelab-ha-discovery"
-SCHEMA_VERSION = 1
-
-DEFAULT_TIMERS = {
-    "cpu": 5.0,
-    "gpu": 5.0,
-    "disk_smart": 60.0,
-    "nvme_smart": 60.0,
-    "network": 1.0,
-    "docker_containers": 60.0,
-    "podman_containers": 60.0,
-    "frigate": 10.0,
-    "asus_router_cpu": 1.0,
-    "asus_router_connected_clients": 1.0,
-    "asus_router_network": 1.0,
-}
-DEFAULT_TIMER_PUBLISH_DISCOVERY_CONFIG = 60.0
-DEFAULT_FRIGATE_METRICS_URL = "http://127.0.0.1:5000/api/metrics"
-DEFAULT_CONTAINER_INCLUDE_LABEL = "homelab-ha-discovery.enabled=true"
-FRIGATE_DETECT_TIMEOUT_SECONDS = 2.0
-DEFAULT_GPU_COLLECTOR = "nvidia"
-GPU_COLLECTOR_ALIASES = {
-    "nvidia": "nvidia",
-    "amd": "amd_rocm",
-    "rocm": "amd_rocm",
-    "amd_rocm": "amd_rocm",
-    "amd-rocm": "amd_rocm",
-}
-GPU_COLLECTOR_LABELS = {
-    "nvidia": "NVIDIA",
-    "amd_rocm": "AMD ROCm",
-}
-SCRIPT_BY_SERVICE_TYPE = {
-    "cpu": "publish_cpu_metrics.py",
-    "gpu": "publish_gpu_metrics.py",
-    "disk_smart": "publish_sdx_metrics.py",
-    "nvme_smart": "publish_nvme_metrics.py",
-    "network": "publish_network_metrics.py",
-    "docker_containers": "publish_docker_container_metrics.py",
-    "podman_containers": "publish_podman_container_metrics.py",
-    "frigate": "publish_frigate_metrics.py",
-    "asus_router_cpu": "publish_asus_router_cpu_metrics.py",
-    "asus_router_connected_clients": (
-        "publish_asus_router_connected_clients_metrics.py"
-    ),
-    "asus_router_network": "publish_asus_router_network_metrics.py",
-}
-DEBIAN_PACKAGES = (
-    "python3",
-    "python3-venv",
-    "python3-pip",
-    "procps",
-    "lm-sensors",
-    "smartmontools",
+from homelab_ha_discovery.installer.app_install import (
+    COPY_IGNORE_NAMES,
+    DEBIAN_PACKAGES,
+    copy_ignore,
+    create_virtualenv_and_install_requirements,
+    install_system_packages,
+    paths_are_same,
+    prepare_app_dir,
+    remove_existing_path,
+    repo_root,
 )
-COPY_IGNORE_NAMES = {
-    ".agents",
-    ".codex",
-    ".git",
-    ".mypy_cache",
-    ".nox",
-    ".pytest_cache",
-    ".ruff_cache",
-    ".tox",
-    ".venv",
-    "__pycache__",
-    "build",
-    "dist",
-    "session",
-}
-UNIT_PART_RE = re.compile(r"[^A-Za-z0-9_.-]+")
-PODMAN_SCOPE_RE = re.compile(r"[^a-z0-9_]+")
+from homelab_ha_discovery.installer.config_io import (
+    CONFIG_FILENAME,
+    DEFAULT_APP_DIR,
+    DEFAULT_CONFIG_DIR,
+    DEFAULT_CONTAINER_INCLUDE_LABEL,
+    DEFAULT_FRIGATE_METRICS_URL,
+    DEFAULT_GPU_COLLECTOR,
+    DEFAULT_SYSTEMD_DIR,
+    DEFAULT_TIMER_PUBLISH_DISCOVERY_CONFIG,
+    DEFAULT_TIMERS,
+    FRIGATE_DETECT_TIMEOUT_SECONDS,
+    GPU_COLLECTOR_ALIASES,
+    GPU_COLLECTOR_LABELS,
+    MQTT_ENV_FILENAME,
+    RuntimePaths,
+    SCHEMA_VERSION,
+    SCRIPT_BY_SERVICE_TYPE,
+    SERVICE_PREFIX,
+    SKIP_ENV_FILES_ENV,
+    build_paths,
+    command_detect,
+    ensure_config_dir,
+    ensure_mqtt_env,
+    load_config,
+    mqtt_env_template_text,
+    require_non_negative_seconds,
+    require_positive_seconds,
+    require_ssh_port,
+    require_string,
+    require_timer,
+    require_uid,
+    service_entry,
+    write_detected_config,
+)
+from homelab_ha_discovery.installer.detect.commands import (
+    command_exists,
+    command_has_output,
+    command_output,
+)
+from homelab_ha_discovery.installer.detect.frigate import http_url_reachable
+from homelab_ha_discovery.installer.detect.gpu import (
+    detect_amd_rocm_gpu_indexes,
+    detect_nvidia_gpu_indexes,
+    parse_amd_rocm_gpu_indexes,
+    parse_nvidia_gpu_indexes,
+)
+from homelab_ha_discovery.installer.detect.network import (
+    default_route_interfaces,
+    detect_network_interfaces,
+    read_text,
+)
+from homelab_ha_discovery.installer.detect.podman import (
+    PODMAN_SCOPE_RE,
+    detect_podman_has_running_containers,
+    detected_podman_service_entries,
+    podman_ps_command,
+    podman_scope_from_value,
+    unique_rootless_podman_users,
+    user_uid,
+)
+from homelab_ha_discovery.installer.detect.storage import (
+    detect_disk_devices,
+    detect_nvme_devices,
+)
+from homelab_ha_discovery.installer.systemd_manager import (
+    existing_generated_unit_paths,
+    load_configured_units,
+    maybe_remove_existing_generated_units,
+    prompt_remove_existing_generated_units,
+    remove_existing_generated_units,
+    require_installed_unit_files,
+    run_command,
+    unit_names,
+    unit_names_from_paths,
+)
+from homelab_ha_discovery.installer.systemd_units import (
+    UNIT_PART_RE,
+    UnitSpec,
+    build_unit_specs,
+    container_include_labels,
+    discovery_timer_for_service,
+    enabled_services,
+    gpu_indexes_for_service,
+    normalize_gpu_collector,
+    podman_rootless_uid_for_service,
+    podman_scope_for_service,
+    render_unit,
+    require_gpu_index,
+    service_command,
+    service_component,
+    service_description,
+    service_unit_name,
+    systemd_arg,
+    unit_part,
+    write_units,
+)
 
 
-@dataclass(frozen=True)
-class RuntimePaths:
-    app_dir: Path
-    config_dir: Path
-    systemd_dir: Path
-    source_root: Path
-
-    @property
-    def config_path(self) -> Path:
-        return self.config_dir / CONFIG_FILENAME
-
-    @property
-    def mqtt_env_path(self) -> Path:
-        return self.config_dir / MQTT_ENV_FILENAME
-
-
-@dataclass(frozen=True)
-class UnitSpec:
-    name: str
-    content: str
-
-    def path(self, systemd_dir: Path) -> Path:
-        return systemd_dir / self.name
-
-
-def repo_root() -> Path:
-    return Path(__file__).resolve().parents[3]
-
-
-def build_paths(args: argparse.Namespace) -> RuntimePaths:
-    return RuntimePaths(
-        app_dir=args.app_dir,
-        config_dir=args.config_dir,
-        systemd_dir=args.systemd_dir,
-        source_root=repo_root(),
-    )
-
-
-def run_command(
-    command: list[str],
-    dry_run: bool,
-    cwd: Path | None = None,
-) -> None:
-    printable = " ".join(shlex.quote(part) for part in command)
-    if cwd is not None:
-        printable = f"(cd {shlex.quote(str(cwd))} && {printable})"
-    if dry_run:
-        print(f"DRY RUN: {printable}")
-        return
-    subprocess.run(command, cwd=cwd, check=True)
-
-
-def copy_ignore(_directory: str, names: list[str]) -> set[str]:
-    ignored = set()
-    for name in names:
-        if name in COPY_IGNORE_NAMES or name.endswith((".pyc", ".pyo")):
-            ignored.add(name)
-    return ignored
-
-
-def remove_existing_path(path: Path) -> None:
-    if path.is_dir() and not path.is_symlink():
-        shutil.rmtree(path)
-    else:
-        path.unlink()
-
-
-def paths_are_same(left: Path, right: Path) -> bool:
-    return left.resolve() == right.resolve()
-
-
-def install_system_packages(dry_run: bool) -> None:
-    run_command(["apt-get", "update"], dry_run)
-    run_command(["apt-get", "install", "-y", *DEBIAN_PACKAGES], dry_run)
-
-
-def prepare_app_dir(paths: RuntimePaths, force_copy: bool, dry_run: bool) -> None:
-    if paths_are_same(paths.source_root, paths.app_dir):
-        print(f"App directory is already the current checkout: {paths.app_dir}")
-        return
-
-    if paths.app_dir.exists():
-        if not force_copy:
-            raise RuntimeError(
-                f"{paths.app_dir} already exists; rerun with --force-copy to replace it"
-            )
-        if dry_run:
-            print(f"DRY RUN: would remove existing app directory {paths.app_dir}")
-        else:
-            remove_existing_path(paths.app_dir)
-
-    if dry_run:
-        print(f"DRY RUN: would copy {paths.source_root} to {paths.app_dir}")
-        return
-
-    paths.app_dir.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copytree(paths.source_root, paths.app_dir, ignore=copy_ignore)
-
-
-def create_virtualenv_and_install_requirements(
-    paths: RuntimePaths,
-    dry_run: bool,
-) -> None:
-    python3 = shutil.which("python3") or sys.executable
-    venv_dir = paths.app_dir / ".venv"
-    requirements_path = paths.app_dir / "requirements.txt"
-    run_command([python3, "-m", "venv", str(venv_dir)], dry_run)
-    run_command(
-        [
-            str(venv_dir / "bin" / "python"),
-            "-m",
-            "pip",
-            "install",
-            "-r",
-            str(requirements_path),
-        ],
-        dry_run,
-    )
-
-
-def ensure_config_dir(paths: RuntimePaths, dry_run: bool) -> None:
-    if dry_run:
-        print(f"DRY RUN: would create config directory {paths.config_dir}")
-        return
-    paths.config_dir.mkdir(parents=True, exist_ok=True)
-
-
-def mqtt_env_template_text() -> str:
-    return "\n".join(
-        (
-            "# MQTT settings for homelab-ha-discovery.",
-            "# Edit this file before enabling generated services.",
-            "HA_MQTT_HOST=mqtt-server-ip",
-            "HA_MQTT_PORT=1883",
-            "HA_MQTT_TOPIC_PREFIX=homelab-ha-discovery",
-            "# HA_MQTT_USERNAME=your-user",
-            "# HA_MQTT_PASSWORD=your-password",
-            "",
-        )
-    )
-
-
-def ensure_mqtt_env(paths: RuntimePaths, dry_run: bool) -> bool:
-    if paths.mqtt_env_path.exists():
-        print(f"MQTT environment file found: {paths.mqtt_env_path}")
-        return True
-
-    if dry_run:
-        print(f"DRY RUN: would write MQTT environment file {paths.mqtt_env_path}")
-    else:
-        paths.mqtt_env_path.write_text(mqtt_env_template_text(), encoding="utf-8")
-        paths.mqtt_env_path.chmod(0o600)
-        print(f"Wrote MQTT environment file: {paths.mqtt_env_path}")
-
-    print(
-        "WARNING: edit MQTT settings before services are enabled: "
-        f"{paths.mqtt_env_path}",
-        file=sys.stderr,
-    )
-    return False
-
-
-def command_exists(command: str) -> bool:
-    return shutil.which(command) is not None
-
-
-def command_output(command: list[str], timeout: float = 5.0) -> str:
+@contextmanager
+def _patched_module_attrs(replacements):
+    originals = []
+    for module, name, value in replacements:
+        originals.append((module, name, getattr(module, name)))
+        setattr(module, name, value)
     try:
-        result = subprocess.run(
-            command,
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return ""
-    if result.returncode != 0:
-        return ""
-    return result.stdout.strip()
-
-
-def command_has_output(command: list[str], timeout: float = 5.0) -> bool:
-    return bool(command_output(command, timeout=timeout))
-
-
-def podman_scope_from_value(value: str) -> str:
-    scope = PODMAN_SCOPE_RE.sub("_", value.strip().lower()).strip("_")
-    if not scope:
-        raise RuntimeError("podman scope is required")
-    return scope
-
-
-def unique_rootless_podman_users(values: list[str] | tuple[str, ...]) -> list[str]:
-    users: list[str] = []
-    for value in values:
-        user = require_string(value, "rootless_podman_user")
-        if user not in users:
-            users.append(user)
-    return users
-
-
-def user_uid(user: str) -> int | None:
-    try:
-        return pwd.getpwnam(user).pw_uid
-    except KeyError:
-        return None
-
-
-def podman_ps_command(
-    podman_command: str,
-    rootless_user: str | None = None,
-    rootless_uid: int | None = None,
-) -> list[str]:
-    command = [podman_command, "ps", "--quiet"]
-    if rootless_user is None:
-        return command
-    if rootless_uid is None:
-        raise RuntimeError(
-            f"uid for rootless Podman user is required: {rootless_user}"
-        )
-    return [
-        "runuser",
-        "-u",
-        rootless_user,
-        "--",
-        "env",
-        f"XDG_RUNTIME_DIR=/run/user/{rootless_uid}",
-        *command,
-    ]
-
-
-def detect_podman_has_running_containers(
-    podman_command: str,
-    rootless_user: str | None = None,
-    rootless_uid: int | None = None,
-) -> bool:
-    return command_has_output(
-        podman_ps_command(
-            podman_command,
-            rootless_user=rootless_user,
-            rootless_uid=rootless_uid,
-        )
-    )
-
-
-def detected_podman_service_entries(
-    rootless_podman_users: list[str] | tuple[str, ...] = (),
-) -> list[dict[str, Any]]:
-    podman_command = shutil.which("podman") or "podman"
-    podman_exists = command_exists("podman")
-    podman_missing = [] if podman_exists else ["podman"]
-    root_enabled = (
-        podman_exists
-        and detect_podman_has_running_containers(podman_command)
-    )
-    root_note = (
-        "publishes running root Podman containers"
-        if root_enabled
-        else "disabled template; enable after root Podman containers are running"
-    )
-    services = [
-        service_entry(
-            "podman_containers",
-            root_enabled,
-            scope="root",
-            include_label=DEFAULT_CONTAINER_INCLUDE_LABEL,
-            podman_command=podman_command if podman_exists else "podman",
-            expire_after=None,
-            missing_requirements=podman_missing,
-            note=root_note,
-        )
-    ]
-
-    for user in unique_rootless_podman_users(tuple(rootless_podman_users)):
-        uid = user_uid(user)
-        missing_requirements = list(podman_missing)
-        if uid is None:
-            missing_requirements.append(f"user:{user}")
-        if not command_exists("runuser"):
-            missing_requirements.append("runuser")
-
-        enabled = (
-            not missing_requirements
-            and uid is not None
-            and detect_podman_has_running_containers(
-                podman_command,
-                rootless_user=user,
-                rootless_uid=uid,
-            )
-        )
-        note = (
-            f"publishes running rootless Podman containers for {user}"
-            if enabled
-            else (
-                "disabled template; enable after rootless Podman containers "
-                f"are running for {user}"
-            )
-        )
-        values: dict[str, Any] = {
-            "scope": podman_scope_from_value(user),
-            "rootless_user": user,
-            "include_label": DEFAULT_CONTAINER_INCLUDE_LABEL,
-            "podman_command": podman_command if podman_exists else "podman",
-            "expire_after": None,
-            "missing_requirements": missing_requirements,
-            "note": note,
-        }
-        if uid is not None:
-            values["rootless_uid"] = uid
-        services.append(
-            service_entry(
-                "podman_containers",
-                enabled,
-                **values,
-            )
-        )
-
-    return services
-
-
-def normalize_gpu_collector(value: object) -> str:
-    if value is None:
-        return DEFAULT_GPU_COLLECTOR
-    if not isinstance(value, str) or not value.strip():
-        raise RuntimeError("gpu collector must be a non-empty string")
-    normalized = value.strip().lower().replace("-", "_")
-    if normalized not in GPU_COLLECTOR_ALIASES:
-        choices = ", ".join(sorted(GPU_COLLECTOR_ALIASES))
-        raise RuntimeError(
-            f"unsupported gpu collector: {value}; expected one of {choices}"
-        )
-    return GPU_COLLECTOR_ALIASES[normalized]
-
-
-def parse_nvidia_gpu_indexes(output: str) -> list[int]:
-    indexes: list[int] = []
-    for line in output.splitlines():
-        match = re.match(r"\s*GPU\s+(\d+):", line)
-        if match is not None:
-            indexes.append(int(match.group(1)))
-    return sorted(set(indexes))
-
-
-def detect_nvidia_gpu_indexes() -> list[int]:
-    if not command_exists("nvidia-smi"):
-        return []
-    return parse_nvidia_gpu_indexes(command_output(["nvidia-smi", "-L"]))
-
-
-def parse_amd_rocm_gpu_indexes(output: str) -> list[int]:
-    try:
-        data = json.loads(output)
-    except json.JSONDecodeError:
-        data = None
-
-    indexes: set[int] = set()
-    if isinstance(data, dict):
-        for key, value in data.items():
-            if not isinstance(key, str) or not isinstance(value, dict):
-                continue
-            match = re.match(r"\s*(?:card|gpu)(\d+)\s*$", key, re.IGNORECASE)
-            if match is not None:
-                indexes.add(int(match.group(1)))
-        return sorted(indexes)
-
-    for line in output.splitlines():
-        match = re.search(r"(?:GPU|card)\s*\[?(\d+)\]?", line, re.IGNORECASE)
-        if match is not None:
-            indexes.add(int(match.group(1)))
-    return sorted(indexes)
-
-
-def detect_amd_rocm_gpu_indexes() -> list[int]:
-    if not command_exists("rocm-smi"):
-        return []
-    return parse_amd_rocm_gpu_indexes(
-        command_output(["rocm-smi", "--showproductname", "--json"])
-    )
-
-
-def http_url_reachable(
-    url: str,
-    timeout: float = FRIGATE_DETECT_TIMEOUT_SECONDS,
-) -> bool:
-    try:
-        with urllib.request.urlopen(url, timeout=timeout) as response:
-            status = getattr(response, "status", 200)
-            return 200 <= status < 300
-    except (OSError, urllib.error.URLError):
-        return False
-
-
-def read_text(path: Path) -> str:
-    try:
-        return path.read_text(encoding="utf-8").strip()
-    except OSError:
-        return ""
-
-
-def default_route_interfaces() -> set[str]:
-    route_path = Path("/proc/net/route")
-    interfaces: set[str] = set()
-    try:
-        lines = route_path.read_text(encoding="utf-8").splitlines()
-    except OSError:
-        return interfaces
-
-    for line in lines[1:]:
-        fields = line.split()
-        if len(fields) < 4:
-            continue
-        interface, destination, _gateway, flags = fields[:4]
-        try:
-            route_is_up = bool(int(flags, 16) & 0x2)
-        except ValueError:
-            route_is_up = False
-        if destination == "00000000" and route_is_up:
-            interfaces.add(interface)
-    return interfaces
-
-
-def detect_disk_devices() -> list[str]:
-    sys_block = Path("/sys/block")
-    if not sys_block.exists():
-        return []
-    devices = []
-    for path in sorted(sys_block.iterdir(), key=lambda item: item.name):
-        if not re.fullmatch(r"sd[a-z]+", path.name):
-            continue
-        dev_path = Path("/dev") / path.name
-        if dev_path.exists():
-            devices.append(str(dev_path))
-    return devices
-
-
-def detect_nvme_devices() -> list[str]:
-    sys_nvme = Path("/sys/class/nvme")
-    devices = []
-    if sys_nvme.exists():
-        for path in sorted(sys_nvme.iterdir(), key=lambda item: item.name):
-            if not re.fullmatch(r"nvme\d+", path.name):
-                continue
-            dev_path = Path("/dev") / path.name
-            if dev_path.exists():
-                devices.append(str(dev_path))
-    if devices:
-        return devices
-
-    return [
-        str(path)
-        for path in sorted(Path("/dev").glob("nvme[0-9]*"))
-        if re.fullmatch(r"nvme\d+", path.name)
-    ]
-
-
-def detect_network_interfaces() -> list[dict[str, Any]]:
-    sys_net = Path("/sys/class/net")
-    if not sys_net.exists():
-        return []
-    default_routes = default_route_interfaces()
-    interfaces = []
-    for path in sorted(sys_net.iterdir(), key=lambda item: item.name):
-        if path.name == "lo":
-            continue
-        operstate = read_text(path / "operstate") or "unknown"
-        if default_routes:
-            enabled = path.name in default_routes
-            note = "default route interface" if enabled else "not a default route"
-        else:
-            enabled = operstate in {"up", "unknown"}
-            note = f"operstate={operstate}"
-        interfaces.append(
-            {
-                "type": "network",
-                "enabled": enabled,
-                "dev": path.name,
-                "timer": DEFAULT_TIMERS["network"],
-                "detected_operstate": operstate,
-                "note": note,
-            }
-        )
-    return interfaces
-
-
-def service_entry(
-    service_type: str,
-    enabled: bool,
-    **values: Any,
-) -> dict[str, Any]:
-    entry: dict[str, Any] = {
-        "type": service_type,
-        "enabled": enabled,
-        "timer": DEFAULT_TIMERS[service_type],
-    }
-    entry.update(values)
-    entry.setdefault("expire_after", None)
-    return entry
+        yield
+    finally:
+        for module, name, value in reversed(originals):
+            setattr(module, name, value)
 
 
 def build_detected_config(
     device: str,
     rootless_podman_users: list[str] | tuple[str, ...] = (),
-) -> dict[str, Any]:
-    services: list[dict[str, Any]] = []
+) -> dict[str, object]:
+    from homelab_ha_discovery.installer.detect import config as detect_config
+    from homelab_ha_discovery.installer.detect import podman as detect_podman
 
-    cpu_missing = [
-        command
-        for command in ("top", "sensors")
-        if not command_exists(command)
-    ]
-    services.append(
-        service_entry(
-            "cpu",
-            not cpu_missing,
-            missing_requirements=cpu_missing,
-        )
-    )
-
-    nvidia_exists = command_exists("nvidia-smi")
-    nvidia_indexes = detect_nvidia_gpu_indexes() if nvidia_exists else []
-    nvidia_values: dict[str, Any] = {
-        "collector": "nvidia",
-        "missing_requirements": [] if nvidia_exists else ["nvidia-smi"],
-        "note": (
-            "publishes selected NVIDIA GPUs in one timer loop"
-            if nvidia_indexes
-            else "disabled template; enable after NVIDIA tooling detects GPUs"
+    replacements = [
+        (detect_config, "command_exists", command_exists),
+        (detect_config, "detect_nvidia_gpu_indexes", detect_nvidia_gpu_indexes),
+        (detect_config, "detect_amd_rocm_gpu_indexes", detect_amd_rocm_gpu_indexes),
+        (detect_config, "detect_disk_devices", detect_disk_devices),
+        (detect_config, "detect_nvme_devices", detect_nvme_devices),
+        (detect_config, "detect_network_interfaces", detect_network_interfaces),
+        (detect_config, "http_url_reachable", http_url_reachable),
+        (detect_podman, "command_exists", command_exists),
+        (detect_podman, "command_has_output", command_has_output),
+        (
+            detect_podman,
+            "detect_podman_has_running_containers",
+            detect_podman_has_running_containers,
         ),
-    }
-    if nvidia_indexes:
-        nvidia_values["gpu_indexes"] = nvidia_indexes
-    services.append(
-        service_entry(
-            "gpu",
-            bool(nvidia_indexes),
-            **nvidia_values,
-        )
-    )
-
-    amd_rocm_exists = command_exists("rocm-smi")
-    amd_rocm_indexes = detect_amd_rocm_gpu_indexes() if amd_rocm_exists else []
-    if amd_rocm_exists:
-        amd_rocm_values: dict[str, Any] = {
-            "collector": "amd_rocm",
-            "missing_requirements": [],
-            "note": (
-                "publishes selected AMD ROCm GPUs in one timer loop"
-                if amd_rocm_indexes
-                else "disabled template; enable after rocm-smi detects GPUs"
-            ),
-        }
-        if amd_rocm_indexes:
-            amd_rocm_values["gpu_indexes"] = amd_rocm_indexes
-        services.append(
-            service_entry(
-                "gpu",
-                bool(amd_rocm_indexes),
-                **amd_rocm_values,
-            )
-        )
-
-    smart_missing = [
-        command
-        for command in ("sudo", "smartctl")
-        if not command_exists(command)
+        (detect_podman, "user_uid", user_uid),
     ]
-    smart_enabled = not smart_missing
-    for dev in detect_disk_devices():
-        services.append(
-            service_entry(
-                "disk_smart",
-                smart_enabled,
-                dev=dev,
-                missing_requirements=smart_missing,
-                note="requires non-interactive sudo permission for smartctl",
-            )
-        )
-    for dev in detect_nvme_devices():
-        services.append(
-            service_entry(
-                "nvme_smart",
-                smart_enabled,
-                dev=dev,
-                missing_requirements=smart_missing,
-                note="requires non-interactive sudo permission for smartctl",
-            )
-        )
-    services.extend(detect_network_interfaces())
-    services.append(
-        service_entry(
-            "docker_containers",
-            False,
-            include_label=DEFAULT_CONTAINER_INCLUDE_LABEL,
-            expire_after=None,
-            missing_requirements=[] if command_exists("docker") else ["docker"],
-            note=(
-                "disabled template; enable manually after confirming Docker socket "
-                "access"
-            ),
-        )
-    )
-    services.extend(detected_podman_service_entries(rootless_podman_users))
-    frigate_reachable = http_url_reachable(DEFAULT_FRIGATE_METRICS_URL)
-    frigate_values: dict[str, Any] = {
-        "url": DEFAULT_FRIGATE_METRICS_URL,
-        "expire_after": None,
-        "missing_requirements": [],
-    }
-    if not frigate_reachable:
-        frigate_values["note"] = "disabled template; enable after Frigate is running"
-    services.append(
-        service_entry(
-            "frigate",
-            frigate_reachable,
-            **frigate_values,
-        )
-    )
-    services.append(
-        service_entry(
-            "asus_router_cpu",
-            False,
-            router_name="ASUS AX86U",
-            ssh_user="<user>",
-            ssh_ip="<ip-addr>",
-            ssh_port=22,
-            note="disabled template; edit SSH settings and enable manually",
-        )
-    )
-    services.append(
-        service_entry(
-            "asus_router_connected_clients",
-            False,
-            router_name="ASUS AX86U",
-            ssh_user="<user>",
-            ssh_ip="<ip-addr>",
-            ssh_port=22,
-            note="disabled template; edit SSH settings and enable manually",
-        )
-    )
-    services.append(
-        service_entry(
-            "asus_router_network",
-            False,
-            router_name="ASUS AX86U",
-            dev="eth0",
-            ssh_user="<user>",
-            ssh_ip="<ip-addr>",
-            ssh_port=22,
-            note="disabled template; edit SSH settings and enable manually",
-        )
-    )
-
-    return {
-        "schema_version": SCHEMA_VERSION,
-        "generated_by": Path(__file__).name,
-        "generated_at": datetime.now(timezone.utc).isoformat(),
-        "ha_device_id": device,
-        "timer_publish_discovery_config": DEFAULT_TIMER_PUBLISH_DISCOVERY_CONFIG,
-        "services": services,
-    }
-
-
-def write_detected_config(
-    paths: RuntimePaths,
-    device: str,
-    rootless_podman_users: list[str] | tuple[str, ...],
-    force: bool,
-    dry_run: bool,
-    force_option: str,
-) -> None:
-    config = build_detected_config(
-        device,
-        rootless_podman_users=rootless_podman_users,
-    )
-    if paths.config_path.exists() and not force:
-        print(
-            f"Keeping existing config: {paths.config_path}. "
-            f"Use {force_option} to replace it."
-        )
-        return
-
-    rendered = json.dumps(config, indent=2) + "\n"
-    if dry_run:
-        print(f"DRY RUN: would write detected config {paths.config_path}")
-        print(rendered)
-        return
-
-    paths.config_path.write_text(rendered, encoding="utf-8")
-    paths.config_path.chmod(0o644)
-    print(f"Wrote detected metrics config: {paths.config_path}")
-
-
-def load_config(paths: RuntimePaths) -> dict[str, Any]:
-    try:
-        with paths.config_path.open("r", encoding="utf-8") as config_file:
-            config = json.load(config_file)
-    except FileNotFoundError as exc:
-        raise RuntimeError(
-            f"config not found: {paths.config_path}; run detect or bootstrap first"
-        ) from exc
-    except json.JSONDecodeError as exc:
-        raise RuntimeError(f"invalid JSON in {paths.config_path}: {exc}") from exc
-
-    if not isinstance(config, dict):
-        raise RuntimeError(f"config must be a JSON object: {paths.config_path}")
-    return config
-
-
-def require_string(value: object, name: str) -> str:
-    if not isinstance(value, str) or not value.strip():
-        raise RuntimeError(f"{name} is required")
-    return value.strip()
-
-
-def require_timer(value: object, service_type: str) -> float:
-    if value is None:
-        return DEFAULT_TIMERS[service_type]
-    return require_positive_seconds(value, f"timer for {service_type}")
-
-
-def require_positive_seconds(value: object, name: str) -> float:
-    try:
-        timer = float(value)
-    except (TypeError, ValueError) as exc:
-        raise RuntimeError(f"{name} must be a number") from exc
-    if not math.isfinite(timer) or timer <= 0:
-        raise RuntimeError(f"{name} must be greater than 0")
-    return timer
-
-
-def require_non_negative_seconds(value: object, name: str) -> float:
-    try:
-        seconds = float(value)
-    except (TypeError, ValueError) as exc:
-        raise RuntimeError(f"{name} must be a number") from exc
-    if not math.isfinite(seconds) or seconds < 0:
-        raise RuntimeError(f"{name} must be greater than or equal to 0")
-    return seconds
-
-
-def require_ssh_port(value: object) -> int:
-    if value is None:
-        return 22
-    try:
-        port = int(value)
-    except (TypeError, ValueError) as exc:
-        raise RuntimeError("ssh_port must be an integer") from exc
-    if isinstance(value, float) and not value.is_integer():
-        raise RuntimeError("ssh_port must be an integer")
-    if port <= 0 or port > 65535:
-        raise RuntimeError("ssh_port must be between 1 and 65535")
-    return port
-
-
-def container_include_labels(service: dict[str, Any]) -> list[str]:
-    labels: list[str] = []
-    include_label = service.get("include_label")
-    if include_label is not None:
-        labels.append(require_string(include_label, "include_label"))
-
-    include_labels = service.get("include_labels")
-    if include_labels is None:
-        return labels
-    if not isinstance(include_labels, list):
-        raise RuntimeError("include_labels must be a list")
-    for index, value in enumerate(include_labels):
-        labels.append(require_string(value, f"include_labels[{index}]"))
-    return labels
-
-
-def require_uid(value: object, name: str) -> int:
-    try:
-        uid = int(value)
-    except (TypeError, ValueError) as exc:
-        raise RuntimeError(f"{name} must be an integer") from exc
-    if isinstance(value, float) and not value.is_integer():
-        raise RuntimeError(f"{name} must be an integer")
-    if uid < 0:
-        raise RuntimeError(f"{name} must be zero or greater")
-    return uid
-
-
-def podman_scope_for_service(service: dict[str, Any]) -> str:
-    if service.get("scope") is not None:
-        return podman_scope_from_value(require_string(service.get("scope"), "scope"))
-    if service.get("rootless_user") is not None:
-        return podman_scope_from_value(
-            require_string(service.get("rootless_user"), "rootless_user")
-        )
-    return "root"
-
-
-def podman_rootless_uid_for_service(service: dict[str, Any]) -> int:
-    if service.get("rootless_uid") is not None:
-        return require_uid(service.get("rootless_uid"), "rootless_uid")
-
-    user = require_string(service.get("rootless_user"), "rootless_user")
-    uid = user_uid(user)
-    if uid is None:
-        raise RuntimeError(f"rootless_user does not exist: {user}")
-    return uid
-
-
-def require_gpu_index(value: object, name: str) -> int:
-    try:
-        index = int(value)
-    except (TypeError, ValueError) as exc:
-        raise RuntimeError(f"{name} must be an integer") from exc
-    if isinstance(value, float) and not value.is_integer():
-        raise RuntimeError(f"{name} must be an integer")
-    if index < 0:
-        raise RuntimeError(f"{name} must be zero or greater")
-    return index
-
-
-def gpu_indexes_for_service(service: dict[str, Any]) -> list[int]:
-    has_gpu_index = service.get("gpu_index") is not None
-    has_gpu_indexes = service.get("gpu_indexes") is not None
-    if has_gpu_index and has_gpu_indexes:
-        raise RuntimeError("gpu service cannot set both gpu_index and gpu_indexes")
-    if has_gpu_index:
-        return [require_gpu_index(service.get("gpu_index"), "gpu_index")]
-    if not has_gpu_indexes:
-        return []
-
-    values = service.get("gpu_indexes")
-    if not isinstance(values, list) or not values:
-        raise RuntimeError("gpu_indexes must be a non-empty list")
-
-    indexes: list[int] = []
-    for index, value in enumerate(values):
-        gpu_index = require_gpu_index(value, f"gpu_indexes[{index}]")
-        if gpu_index not in indexes:
-            indexes.append(gpu_index)
-    return indexes
-
-
-def discovery_timer_for_service(
-    config: dict[str, Any],
-    service: dict[str, Any],
-) -> float | None:
-    if "timer_publish_discovery_config" in service:
-        value = service["timer_publish_discovery_config"]
-    else:
-        value = config.get(
-            "timer_publish_discovery_config",
-            DEFAULT_TIMER_PUBLISH_DISCOVERY_CONFIG,
-        )
-    if value is None:
-        return None
-    return require_positive_seconds(value, "timer_publish_discovery_config")
-
-
-def unit_part(value: str) -> str:
-    normalized = UNIT_PART_RE.sub("-", value.strip().strip("/")).strip("-")
-    if not normalized:
-        raise RuntimeError(f"could not derive systemd unit name part from {value!r}")
-    return normalized.lower()
-
-
-def systemd_arg(value: object) -> str:
-    text = str(value).replace("%", "%%")
-    if not text:
-        return '""'
-    if re.search(r"\s|[\"'\\]", text):
-        return '"' + text.replace("\\", "\\\\").replace('"', '\\"') + '"'
-    return text
-
-
-def service_component(service: dict[str, Any]) -> str:
-    service_type = require_string(service.get("type"), "service type")
-    if service_type == "cpu":
-        return "cpu"
-    if service_type == "gpu":
-        collector = normalize_gpu_collector(service.get("collector"))
-        indexes = gpu_indexes_for_service(service)
-        gpu_component = (
-            "gpu"
-            if not indexes
-            else "-".join(f"gpu{gpu_index}" for gpu_index in indexes)
-        )
-        if collector == "nvidia":
-            return gpu_component
-        return f"{GPU_COLLECTOR_LABELS[collector]} {gpu_component}"
-    if service_type in {"disk_smart", "nvme_smart"}:
-        return Path(require_string(service.get("dev"), f"{service_type} dev")).name
-    if service_type == "network":
-        return require_string(service.get("dev"), "network dev")
-    if service_type == "docker_containers":
-        return "docker-containers"
-    if service_type == "podman_containers":
-        return f"podman-containers-{podman_scope_for_service(service)}"
-    if service_type == "frigate":
-        return "frigate"
-    if service_type == "asus_router_network":
-        return (
-            f"{require_string(service.get('router_name'), 'router_name')} "
-            f"{require_string(service.get('dev'), 'asus_router_network dev')}"
-        )
-    if service_type in {"asus_router_cpu", "asus_router_connected_clients"}:
-        return require_string(service.get("router_name"), "router_name")
-    raise RuntimeError(f"unsupported service type: {service_type}")
-
-
-def service_unit_name(device: str, service: dict[str, Any]) -> str:
-    service_type = require_string(service.get("type"), "service type")
-    device_part = unit_part(device)
-    component = unit_part(service_component(service))
-    if service_type == "cpu":
-        suffix = "cpu"
-    elif service_type == "gpu":
-        suffix = component
-    elif service_type == "disk_smart":
-        suffix = f"disk-{component}"
-    elif service_type == "nvme_smart":
-        suffix = f"nvme-{component}"
-    elif service_type == "network":
-        suffix = f"network-{component}"
-    elif service_type == "docker_containers":
-        suffix = "docker-containers"
-    elif service_type == "podman_containers":
-        suffix = component
-    elif service_type == "frigate":
-        suffix = "frigate"
-    elif service_type == "asus_router_cpu":
-        suffix = f"asus-router-cpu-{component}"
-    elif service_type == "asus_router_connected_clients":
-        suffix = f"asus-router-connected-clients-{component}"
-    elif service_type == "asus_router_network":
-        suffix = f"asus-router-network-{component}"
-    else:
-        raise RuntimeError(f"unsupported service type: {service_type}")
-    return f"{SERVICE_PREFIX}-{device_part}-{suffix}.service"
-
-
-def service_description(device: str, service: dict[str, Any]) -> str:
-    service_type = require_string(service.get("type"), "service type")
-    component = service_component(service)
-    if service_type == "cpu":
-        return f"Homelab HA Discovery CPU metrics for {device}"
-    if service_type == "gpu":
-        collector = normalize_gpu_collector(service.get("collector"))
-        return (
-            "Homelab HA Discovery "
-            f"{GPU_COLLECTOR_LABELS[collector]} GPU metrics for {device}"
-        )
-    if service_type == "disk_smart":
-        return f"Homelab HA Discovery disk SMART metrics for {device} {component}"
-    if service_type == "nvme_smart":
-        return f"Homelab HA Discovery NVMe SMART metrics for {device} {component}"
-    if service_type == "network":
-        return f"Homelab HA Discovery network metrics for {device} {component}"
-    if service_type == "docker_containers":
-        return f"Homelab HA Discovery Docker container metrics for {device}"
-    if service_type == "podman_containers":
-        return (
-            "Homelab HA Discovery Podman container metrics "
-            f"for {device} {podman_scope_for_service(service)}"
-        )
-    if service_type == "frigate":
-        return f"Homelab HA Discovery Frigate metrics for {device}"
-    if service_type == "asus_router_cpu":
-        return f"Homelab HA Discovery ASUS router CPU metrics for {device} {component}"
-    if service_type == "asus_router_connected_clients":
-        return (
-            "Homelab HA Discovery ASUS router connected-client metrics "
-            f"for {device} {component}"
-        )
-    if service_type == "asus_router_network":
-        return (
-            "Homelab HA Discovery ASUS router network metrics "
-            f"for {device} {component}"
-        )
-    raise RuntimeError(f"unsupported service type: {service_type}")
-
-
-def service_command(
-    paths: RuntimePaths,
-    device: str,
-    service: dict[str, Any],
-    discovery_timer: float | None,
-) -> list[str]:
-    service_type = require_string(service.get("type"), "service type")
-    script_name = SCRIPT_BY_SERVICE_TYPE.get(service_type)
-    if script_name is None:
-        raise RuntimeError(f"unsupported service type: {service_type}")
-
-    timer = require_timer(service.get("timer"), service_type)
-    command = [
-        str(paths.app_dir / ".venv" / "bin" / "python"),
-        str(paths.app_dir / "src" / "homelab_ha_discovery" / "scripts" / script_name),
-        "--ha-device-id",
-        device,
-    ]
-    if service_type == "gpu":
-        collector = normalize_gpu_collector(service.get("collector"))
-        if collector != DEFAULT_GPU_COLLECTOR:
-            command.extend(["--collector", collector])
-        for gpu_index in gpu_indexes_for_service(service):
-            command.extend(["--gpu", str(gpu_index)])
-    if service_type in {"disk_smart", "nvme_smart", "network"}:
-        command.extend(["--dev", require_string(service.get("dev"), "dev")])
-    if service_type == "docker_containers":
-        if service.get("all"):
-            command.append("--all")
-        for label in container_include_labels(service):
-            command.extend(["--include-label", label])
-        if service.get("docker_command") is not None:
-            command.extend(
-                [
-                    "--docker-command",
-                    require_string(service.get("docker_command"), "docker_command"),
-                ]
-            )
-        if service.get("debug"):
-            command.append("--debug")
-    if service_type == "podman_containers":
-        if service.get("all"):
-            command.append("--all")
-        for label in container_include_labels(service):
-            command.extend(["--include-label", label])
-        if service.get("podman_command") is not None:
-            command.extend(
-                [
-                    "--podman-command",
-                    require_string(service.get("podman_command"), "podman_command"),
-                ]
-            )
-        command.extend(["--podman-scope", podman_scope_for_service(service)])
-        if service.get("debug"):
-            command.append("--debug")
-    if service_type == "frigate":
-        command.extend(
-            [
-                "--url",
-                require_string(
-                    service.get("url", DEFAULT_FRIGATE_METRICS_URL),
-                    "url",
-                ),
-            ]
-        )
-        if service.get("debug"):
-            command.append("--debug")
-    if service_type == "asus_router_network":
-        command.extend(
-            [
-                "--router-name",
-                require_string(service.get("router_name"), "router_name"),
-                "--dev",
-                require_string(service.get("dev"), "dev"),
-                "--ssh-user",
-                require_string(service.get("ssh_user"), "ssh_user"),
-                "--ssh-ip",
-                require_string(service.get("ssh_ip"), "ssh_ip"),
-                "--ssh-port",
-                str(require_ssh_port(service.get("ssh_port"))),
-            ]
-        )
-    if service_type in {"asus_router_cpu", "asus_router_connected_clients"}:
-        command.extend(
-            [
-                "--router-name",
-                require_string(service.get("router_name"), "router_name"),
-                "--ssh-user",
-                require_string(service.get("ssh_user"), "ssh_user"),
-                "--ssh-ip",
-                require_string(service.get("ssh_ip"), "ssh_ip"),
-                "--ssh-port",
-                str(require_ssh_port(service.get("ssh_port"))),
-            ]
-        )
-    if service_type == "asus_router_connected_clients":
-        if service.get("client_list_command") is not None:
-            command.extend(
-                [
-                    "--client-list-command",
-                    require_string(
-                        service.get("client_list_command"),
-                        "client_list_command",
-                    ),
-                ]
-            )
-    if service_type == "asus_router_cpu":
-        if service.get("top_command") is not None:
-            command.extend(
-                [
-                    "--top-command",
-                    require_string(service.get("top_command"), "top_command"),
-                ]
-            )
-        if service.get("temperature_command") is not None:
-            command.extend(
-                [
-                    "--temperature-command",
-                    require_string(
-                        service.get("temperature_command"),
-                        "temperature_command",
-                    ),
-                ]
-            )
-    if service_type == "asus_router_network":
-        if service.get("network_command") is not None:
-            command.extend(
-                [
-                    "--network-command",
-                    require_string(service.get("network_command"), "network_command"),
-                ]
-            )
-    if service.get("expire_after") is not None:
-        command.extend(
-            [
-                "--expire-after",
-                str(
-                    require_non_negative_seconds(
-                        service.get("expire_after"),
-                        "expire_after",
-                    )
-                ),
-            ]
-        )
-    command.extend(["--timer", str(timer)])
-
-    if discovery_timer is not None:
-        command.extend(
-            [
-                "--timer-publish-discovery-config",
-                str(discovery_timer),
-            ]
-        )
-    return command
-
-
-def render_unit(
-    paths: RuntimePaths,
-    device: str,
-    service: dict[str, Any],
-    discovery_timer: float | None,
-) -> UnitSpec:
-    name = service_unit_name(device, service)
-    description = service_description(device, service)
-    command = " ".join(
-        systemd_arg(arg)
-        for arg in service_command(paths, device, service, discovery_timer)
-    )
-    service_lines = ["Type=simple"]
-    if require_string(service.get("type"), "service type") == "podman_containers":
-        if service.get("rootless_user") is not None:
-            rootless_user = require_string(
-                service.get("rootless_user"),
-                "rootless_user",
-            )
-            rootless_uid = podman_rootless_uid_for_service(service)
-            service_lines.extend(
-                (
-                    f"User={rootless_user}",
-                    f"Environment=XDG_RUNTIME_DIR=/run/user/{rootless_uid}",
-                )
-            )
-    service_lines.extend(
-        (
-            f"WorkingDirectory={systemd_arg(paths.app_dir)}",
-            f"EnvironmentFile=-{systemd_arg(paths.mqtt_env_path)}",
-            f"Environment={SKIP_ENV_FILES_ENV}=1",
-            f"ExecStart={command}",
-            "Restart=always",
-            "RestartSec=60s",
-        )
-    )
-    content = "\n".join(
-        (
-            "# Generated by homelab-ha-discovery.",
-            "# Edit host-metrics.json and rerun install to regenerate this unit.",
-            "[Unit]",
-            f"Description={description}",
-            "Wants=network-online.target",
-            "After=network-online.target",
-            "",
-            "[Service]",
-            *service_lines,
-            "",
-            "[Install]",
-            "WantedBy=multi-user.target",
-            "",
-        )
-    )
-    return UnitSpec(name=name, content=content)
-
-
-def enabled_services(config: dict[str, Any]) -> tuple[str, list[dict[str, Any]]]:
-    device = require_string(config.get("ha_device_id"), "ha_device_id")
-    services = config.get("services")
-    if not isinstance(services, list):
-        raise RuntimeError("services must be a list")
-    enabled = [
-        service
-        for service in services
-        if isinstance(service, dict) and service.get("enabled", True)
-    ]
-    return device, enabled
-
-
-def build_unit_specs(paths: RuntimePaths, config: dict[str, Any]) -> list[UnitSpec]:
-    device, services = enabled_services(config)
-    return [
-        render_unit(
-            paths,
+    with _patched_module_attrs(replacements):
+        return detect_config.build_detected_config(
             device,
-            service,
-            discovery_timer_for_service(config, service),
+            rootless_podman_users=rootless_podman_users,
         )
-        for service in services
-    ]
-
-
-def write_units(paths: RuntimePaths, units: list[UnitSpec], dry_run: bool) -> None:
-    if not units:
-        raise RuntimeError("no enabled services found in config")
-    if dry_run:
-        for unit in units:
-            print(f"DRY RUN: would write {unit.path(paths.systemd_dir)}")
-            print(unit.content)
-        return
-
-    paths.systemd_dir.mkdir(parents=True, exist_ok=True)
-    for unit in units:
-        unit_path = unit.path(paths.systemd_dir)
-        unit_path.write_text(unit.content, encoding="utf-8")
-        unit_path.chmod(0o644)
-        print(f"Wrote systemd unit: {unit_path}")
-
-
-def existing_generated_unit_paths(systemd_dir: Path) -> list[Path]:
-    if not systemd_dir.exists():
-        return []
-    return sorted(systemd_dir.glob(f"{SERVICE_PREFIX}-*.service"))
-
-
-def unit_names(units: list[UnitSpec]) -> list[str]:
-    return [unit.name for unit in units]
-
-
-def unit_names_from_paths(unit_paths: list[Path]) -> list[str]:
-    return [unit_path.name for unit_path in unit_paths]
-
-
-def load_configured_units(paths: RuntimePaths) -> list[UnitSpec]:
-    units = build_unit_specs(paths, load_config(paths))
-    if not units:
-        raise RuntimeError("no enabled services found in config")
-    return units
-
-
-def require_installed_unit_files(
-    paths: RuntimePaths,
-    units: list[UnitSpec],
-    dry_run: bool,
-) -> None:
-    missing_units = [
-        unit.name
-        for unit in units
-        if not unit.path(paths.systemd_dir).exists()
-    ]
-    if missing_units and not dry_run:
-        raise RuntimeError(
-            "systemd unit file(s) missing; run install first: "
-            + ", ".join(missing_units)
-        )
-
-
-def remove_existing_generated_units(
-    unit_paths: list[Path],
-    dry_run: bool,
-) -> None:
-    for unit_path in unit_paths:
-        if dry_run:
-            print(f"DRY RUN: would remove existing systemd unit {unit_path}")
-            continue
-        unit_path.unlink()
-        print(f"Removed existing systemd unit: {unit_path}")
-
-
-def prompt_remove_existing_generated_units(unit_paths: list[Path]) -> bool:
-    print("Existing homelab-ha-discovery systemd unit file(s) found:")
-    for unit_path in unit_paths:
-        print(f"  {unit_path}")
-    answer = input(
-        "Remove all existing homelab-ha-discovery-*.service files before "
-        "writing regenerated units? [y/N] "
-    )
-    return answer.strip().lower() in {"y", "yes"}
-
-
-def maybe_remove_existing_generated_units(
-    paths: RuntimePaths,
-    clean_existing_units: bool,
-    no_clean_existing_units: bool,
-    dry_run: bool,
-) -> None:
-    unit_paths = existing_generated_unit_paths(paths.systemd_dir)
-    if not unit_paths:
-        return
-
-    if clean_existing_units:
-        remove_existing_generated_units(unit_paths, dry_run)
-        return
-
-    if no_clean_existing_units:
-        print("Keeping existing homelab-ha-discovery systemd unit files.")
-        return
-
-    if dry_run:
-        print(
-            "DRY RUN: would prompt to remove existing "
-            f"{paths.systemd_dir}/{SERVICE_PREFIX}-*.service files"
-        )
-        for unit_path in unit_paths:
-            print(f"  {unit_path}")
-        return
-
-    if not sys.stdin.isatty():
-        print(
-            "Existing homelab-ha-discovery systemd unit files were kept because "
-            "stdin is not interactive. Pass --clean-existing-units to remove them.",
-            file=sys.stderr,
-        )
-        return
-
-    if prompt_remove_existing_generated_units(unit_paths):
-        remove_existing_generated_units(unit_paths, dry_run=False)
-    else:
-        print("Keeping existing homelab-ha-discovery systemd unit files.")
 
 
 def command_bootstrap(args: argparse.Namespace) -> int:
-    paths = build_paths(args)
-    try:
-        if args.install_system_packages:
-            install_system_packages(args.dry_run)
-        prepare_app_dir(paths, args.force_copy, args.dry_run)
-        create_virtualenv_and_install_requirements(paths, args.dry_run)
-        ensure_config_dir(paths, args.dry_run)
-        ensure_mqtt_env(paths, args.dry_run)
-        write_detected_config(
-            paths,
-            args.device,
-            rootless_podman_users=args.rootless_podman_user,
-            force=args.force_config,
-            dry_run=args.dry_run,
-            force_option="--force-config",
-        )
-    except (OSError, RuntimeError, subprocess.CalledProcessError) as exc:
-        print(f"Error: {exc}", file=sys.stderr)
-        return 1
-    return 0
+    from homelab_ha_discovery.installer import app_install
+
+    with _patched_module_attrs([(app_install, "run_command", run_command)]):
+        return app_install.command_bootstrap(args)
 
 
-def command_detect(args: argparse.Namespace) -> int:
-    paths = build_paths(args)
-    try:
-        ensure_config_dir(paths, args.dry_run)
-        write_detected_config(
-            paths,
-            args.device,
-            rootless_podman_users=args.rootless_podman_user,
-            force=args.force,
-            dry_run=args.dry_run,
-            force_option="--force",
-        )
-    except (OSError, RuntimeError) as exc:
-        print(f"Error: {exc}", file=sys.stderr)
-        return 1
-    return 0
+def _call_systemd_manager(command_name: str, args: argparse.Namespace) -> int:
+    from homelab_ha_discovery.installer import systemd_manager
+
+    with _patched_module_attrs([(systemd_manager, "run_command", run_command)]):
+        command = getattr(systemd_manager, command_name)
+        return command(args)
 
 
 def command_install(args: argparse.Namespace) -> int:
-    paths = build_paths(args)
-    try:
-        units = build_unit_specs(paths, load_config(paths))
-        maybe_remove_existing_generated_units(
-            paths,
-            args.clean_existing_units,
-            args.no_clean_existing_units,
-            args.dry_run,
-        )
-        write_units(paths, units, args.dry_run)
-        run_command(["systemctl", "daemon-reload"], args.dry_run)
-    except (OSError, RuntimeError, subprocess.CalledProcessError) as exc:
-        print(f"Error: {exc}", file=sys.stderr)
-        return 1
-    return 0
+    return _call_systemd_manager("command_install", args)
 
 
 def command_enable(args: argparse.Namespace) -> int:
-    paths = build_paths(args)
-    try:
-        if not paths.mqtt_env_path.exists() and not args.allow_missing_mqtt_env:
-            raise RuntimeError(
-                f"{paths.mqtt_env_path} is missing; create it before enabling "
-                "services or pass --allow-missing-mqtt-env"
-            )
-        units = load_configured_units(paths)
-        require_installed_unit_files(paths, units, args.dry_run)
-
-        run_command(["systemctl", "daemon-reload"], args.dry_run)
-        command = ["systemctl", "enable"]
-        if args.now:
-            command.append("--now")
-        command.extend(unit_names(units))
-        run_command(command, args.dry_run)
-    except (OSError, RuntimeError, subprocess.CalledProcessError) as exc:
-        print(f"Error: {exc}", file=sys.stderr)
-        return 1
-    return 0
+    return _call_systemd_manager("command_enable", args)
 
 
 def command_stop(args: argparse.Namespace) -> int:
-    paths = build_paths(args)
-    try:
-        units = load_configured_units(paths)
-        require_installed_unit_files(paths, units, args.dry_run)
-        run_command(["systemctl", "stop", *unit_names(units)], args.dry_run)
-    except (OSError, RuntimeError, subprocess.CalledProcessError) as exc:
-        print(f"Error: {exc}", file=sys.stderr)
-        return 1
-    return 0
+    return _call_systemd_manager("command_stop", args)
 
 
 def command_restart(args: argparse.Namespace) -> int:
-    paths = build_paths(args)
-    try:
-        units = load_configured_units(paths)
-        require_installed_unit_files(paths, units, args.dry_run)
-        run_command(["systemctl", "daemon-reload"], args.dry_run)
-        run_command(["systemctl", "restart", *unit_names(units)], args.dry_run)
-    except (OSError, RuntimeError, subprocess.CalledProcessError) as exc:
-        print(f"Error: {exc}", file=sys.stderr)
-        return 1
-    return 0
+    return _call_systemd_manager("command_restart", args)
 
 
 def command_disable(args: argparse.Namespace) -> int:
-    paths = build_paths(args)
-    try:
-        units = load_configured_units(paths)
-        require_installed_unit_files(paths, units, args.dry_run)
-        command = ["systemctl", "disable"]
-        if args.now:
-            command.append("--now")
-        command.extend(unit_names(units))
-        run_command(command, args.dry_run)
-    except (OSError, RuntimeError, subprocess.CalledProcessError) as exc:
-        print(f"Error: {exc}", file=sys.stderr)
-        return 1
-    return 0
+    return _call_systemd_manager("command_disable", args)
 
 
 def command_uninstall(args: argparse.Namespace) -> int:
-    paths = build_paths(args)
-    try:
-        unit_paths = existing_generated_unit_paths(paths.systemd_dir)
-        if not unit_paths:
-            print(
-                "No generated homelab-ha-discovery systemd unit files found in "
-                f"{paths.systemd_dir}"
-            )
-            return 0
-
-        names = unit_names_from_paths(unit_paths)
-        run_command(["systemctl", "stop", *names], args.dry_run)
-        run_command(["systemctl", "disable", *names], args.dry_run)
-        remove_existing_generated_units(unit_paths, args.dry_run)
-        run_command(["systemctl", "daemon-reload"], args.dry_run)
-    except (OSError, RuntimeError, subprocess.CalledProcessError) as exc:
-        print(f"Error: {exc}", file=sys.stderr)
-        return 1
-    return 0
+    return _call_systemd_manager("command_uninstall", args)
 
 
 def command_logs(args: argparse.Namespace) -> int:
-    paths = build_paths(args)
-    try:
-        units = load_configured_units(paths)
-        command = ["journalctl"]
-        if args.follow:
-            command.append("-f")
-        if args.lines is not None:
-            command.extend(["-n", str(args.lines)])
-        if args.since is not None:
-            command.extend(["--since", args.since])
-        for unit_name in unit_names(units):
-            command.extend(["-u", unit_name])
-        run_command(command, args.dry_run)
-    except (OSError, RuntimeError, subprocess.CalledProcessError) as exc:
-        print(f"Error: {exc}", file=sys.stderr)
-        return 1
-    return 0
+    return _call_systemd_manager("command_logs", args)
 
 
 def command_status(args: argparse.Namespace) -> int:
-    paths = build_paths(args)
-    try:
-        units = build_unit_specs(paths, load_config(paths))
-    except (OSError, RuntimeError) as exc:
-        print(f"Error: {exc}", file=sys.stderr)
-        return 1
+    from homelab_ha_discovery.installer.systemd_manager import command_status
 
-    if not units:
-        print(f"No enabled services in {paths.config_path}")
-        return 0
-
-    configured_unit_names = [unit.name for unit in units]
-    print(f"Config: {paths.config_path}")
-    print("Generated unit names:")
-    for unit_name in configured_unit_names:
-        print(f"  {unit_name}")
-    print("Useful commands:")
-    quoted_units = " ".join(shlex.quote(name) for name in configured_unit_names)
-    script_path = shlex.quote(str(Path(__file__).resolve()))
-    print("  systemctl status " + quoted_units)
-    print(f"  sudo python3 {script_path} logs --follow")
-    print(f"  sudo python3 {script_path} restart")
-    print(f"  sudo python3 {script_path} stop")
-    print(f"  sudo python3 {script_path} disable --now")
-    print(f"  sudo python3 {script_path} uninstall")
-    return 0
+    return command_status(args, Path(__file__).resolve())
 
 
 def positive_int(value: str) -> int:
@@ -1635,7 +221,6 @@ def positive_int(value: str) -> int:
     if parsed <= 0:
         raise argparse.ArgumentTypeError("must be greater than 0")
     return parsed
-
 
 def add_common_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
@@ -1661,7 +246,6 @@ def add_common_options(parser: argparse.ArgumentParser) -> None:
         action="store_true",
         help="Print planned writes and commands without changing the system.",
     )
-
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -1833,7 +417,6 @@ def build_parser() -> argparse.ArgumentParser:
     status_parser.set_defaults(func=command_status)
 
     return parser
-
 
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
