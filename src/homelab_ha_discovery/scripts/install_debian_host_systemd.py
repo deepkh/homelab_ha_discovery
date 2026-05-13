@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 import json
 import math
+import pwd
 from pathlib import Path
 import re
 import shlex
@@ -23,6 +24,7 @@ DEFAULT_CONFIG_DIR = Path("/etc/homelab-ha-discovery")
 DEFAULT_SYSTEMD_DIR = Path("/etc/systemd/system")
 CONFIG_FILENAME = "host-metrics.json"
 MQTT_ENV_FILENAME = "mqtt.env"
+SKIP_ENV_FILES_ENV = "HOMELAB_HA_DISCOVERY_SKIP_ENV_FILES"
 SERVICE_PREFIX = "homelab-ha-discovery"
 SCHEMA_VERSION = 1
 
@@ -33,6 +35,7 @@ DEFAULT_TIMERS = {
     "nvme_smart": 60.0,
     "network": 1.0,
     "docker_containers": 60.0,
+    "podman_containers": 60.0,
     "frigate": 10.0,
     "asus_router_cpu": 1.0,
     "asus_router_connected_clients": 1.0,
@@ -40,6 +43,7 @@ DEFAULT_TIMERS = {
 }
 DEFAULT_TIMER_PUBLISH_DISCOVERY_CONFIG = 60.0
 DEFAULT_FRIGATE_METRICS_URL = "http://127.0.0.1:5000/api/metrics"
+DEFAULT_CONTAINER_INCLUDE_LABEL = "homelab-ha-discovery.enabled=true"
 FRIGATE_DETECT_TIMEOUT_SECONDS = 2.0
 DEFAULT_GPU_COLLECTOR = "nvidia"
 GPU_COLLECTOR_ALIASES = {
@@ -60,6 +64,7 @@ SCRIPT_BY_SERVICE_TYPE = {
     "nvme_smart": "publish_nvme_metrics.py",
     "network": "publish_network_metrics.py",
     "docker_containers": "publish_docker_container_metrics.py",
+    "podman_containers": "publish_podman_container_metrics.py",
     "frigate": "publish_frigate_metrics.py",
     "asus_router_cpu": "publish_asus_router_cpu_metrics.py",
     "asus_router_connected_clients": (
@@ -91,6 +96,7 @@ COPY_IGNORE_NAMES = {
     "session",
 }
 UNIT_PART_RE = re.compile(r"[^A-Za-z0-9_.-]+")
+PODMAN_SCOPE_RE = re.compile(r"[^a-z0-9_]+")
 
 
 @dataclass(frozen=True)
@@ -279,6 +285,141 @@ def command_has_output(command: list[str], timeout: float = 5.0) -> bool:
     return bool(command_output(command, timeout=timeout))
 
 
+def podman_scope_from_value(value: str) -> str:
+    scope = PODMAN_SCOPE_RE.sub("_", value.strip().lower()).strip("_")
+    if not scope:
+        raise RuntimeError("podman scope is required")
+    return scope
+
+
+def unique_rootless_podman_users(values: list[str] | tuple[str, ...]) -> list[str]:
+    users: list[str] = []
+    for value in values:
+        user = require_string(value, "rootless_podman_user")
+        if user not in users:
+            users.append(user)
+    return users
+
+
+def user_uid(user: str) -> int | None:
+    try:
+        return pwd.getpwnam(user).pw_uid
+    except KeyError:
+        return None
+
+
+def podman_ps_command(
+    podman_command: str,
+    rootless_user: str | None = None,
+    rootless_uid: int | None = None,
+) -> list[str]:
+    command = [podman_command, "ps", "--quiet"]
+    if rootless_user is None:
+        return command
+    if rootless_uid is None:
+        raise RuntimeError(
+            f"uid for rootless Podman user is required: {rootless_user}"
+        )
+    return [
+        "runuser",
+        "-u",
+        rootless_user,
+        "--",
+        "env",
+        f"XDG_RUNTIME_DIR=/run/user/{rootless_uid}",
+        *command,
+    ]
+
+
+def detect_podman_has_running_containers(
+    podman_command: str,
+    rootless_user: str | None = None,
+    rootless_uid: int | None = None,
+) -> bool:
+    return command_has_output(
+        podman_ps_command(
+            podman_command,
+            rootless_user=rootless_user,
+            rootless_uid=rootless_uid,
+        )
+    )
+
+
+def detected_podman_service_entries(
+    rootless_podman_users: list[str] | tuple[str, ...] = (),
+) -> list[dict[str, Any]]:
+    podman_command = shutil.which("podman") or "podman"
+    podman_exists = command_exists("podman")
+    podman_missing = [] if podman_exists else ["podman"]
+    root_enabled = (
+        podman_exists
+        and detect_podman_has_running_containers(podman_command)
+    )
+    root_note = (
+        "publishes running root Podman containers"
+        if root_enabled
+        else "disabled template; enable after root Podman containers are running"
+    )
+    services = [
+        service_entry(
+            "podman_containers",
+            root_enabled,
+            scope="root",
+            include_label=DEFAULT_CONTAINER_INCLUDE_LABEL,
+            podman_command=podman_command if podman_exists else "podman",
+            expire_after=None,
+            missing_requirements=podman_missing,
+            note=root_note,
+        )
+    ]
+
+    for user in unique_rootless_podman_users(tuple(rootless_podman_users)):
+        uid = user_uid(user)
+        missing_requirements = list(podman_missing)
+        if uid is None:
+            missing_requirements.append(f"user:{user}")
+        if not command_exists("runuser"):
+            missing_requirements.append("runuser")
+
+        enabled = (
+            not missing_requirements
+            and uid is not None
+            and detect_podman_has_running_containers(
+                podman_command,
+                rootless_user=user,
+                rootless_uid=uid,
+            )
+        )
+        note = (
+            f"publishes running rootless Podman containers for {user}"
+            if enabled
+            else (
+                "disabled template; enable after rootless Podman containers "
+                f"are running for {user}"
+            )
+        )
+        values: dict[str, Any] = {
+            "scope": podman_scope_from_value(user),
+            "rootless_user": user,
+            "include_label": DEFAULT_CONTAINER_INCLUDE_LABEL,
+            "podman_command": podman_command if podman_exists else "podman",
+            "expire_after": None,
+            "missing_requirements": missing_requirements,
+            "note": note,
+        }
+        if uid is not None:
+            values["rootless_uid"] = uid
+        services.append(
+            service_entry(
+                "podman_containers",
+                enabled,
+                **values,
+            )
+        )
+
+    return services
+
+
 def normalize_gpu_collector(value: object) -> str:
     if value is None:
         return DEFAULT_GPU_COLLECTOR
@@ -458,7 +599,10 @@ def service_entry(
     return entry
 
 
-def build_detected_config(device: str) -> dict[str, Any]:
+def build_detected_config(
+    device: str,
+    rootless_podman_users: list[str] | tuple[str, ...] = (),
+) -> dict[str, Any]:
     services: list[dict[str, Any]] = []
 
     cpu_missing = [
@@ -548,7 +692,7 @@ def build_detected_config(device: str) -> dict[str, Any]:
         service_entry(
             "docker_containers",
             False,
-            include_label="homelab-ha-discovery.enabled=true",
+            include_label=DEFAULT_CONTAINER_INCLUDE_LABEL,
             expire_after=None,
             missing_requirements=[] if command_exists("docker") else ["docker"],
             note=(
@@ -557,6 +701,7 @@ def build_detected_config(device: str) -> dict[str, Any]:
             ),
         )
     )
+    services.extend(detected_podman_service_entries(rootless_podman_users))
     frigate_reachable = http_url_reachable(DEFAULT_FRIGATE_METRICS_URL)
     frigate_values: dict[str, Any] = {
         "url": DEFAULT_FRIGATE_METRICS_URL,
@@ -620,11 +765,15 @@ def build_detected_config(device: str) -> dict[str, Any]:
 def write_detected_config(
     paths: RuntimePaths,
     device: str,
+    rootless_podman_users: list[str] | tuple[str, ...],
     force: bool,
     dry_run: bool,
     force_option: str,
 ) -> None:
-    config = build_detected_config(device)
+    config = build_detected_config(
+        device,
+        rootless_podman_users=rootless_podman_users,
+    )
     if paths.config_path.exists() and not force:
         print(
             f"Keeping existing config: {paths.config_path}. "
@@ -705,7 +854,7 @@ def require_ssh_port(value: object) -> int:
     return port
 
 
-def docker_include_labels(service: dict[str, Any]) -> list[str]:
+def container_include_labels(service: dict[str, Any]) -> list[str]:
     labels: list[str] = []
     include_label = service.get("include_label")
     if include_label is not None:
@@ -719,6 +868,39 @@ def docker_include_labels(service: dict[str, Any]) -> list[str]:
     for index, value in enumerate(include_labels):
         labels.append(require_string(value, f"include_labels[{index}]"))
     return labels
+
+
+def require_uid(value: object, name: str) -> int:
+    try:
+        uid = int(value)
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError(f"{name} must be an integer") from exc
+    if isinstance(value, float) and not value.is_integer():
+        raise RuntimeError(f"{name} must be an integer")
+    if uid < 0:
+        raise RuntimeError(f"{name} must be zero or greater")
+    return uid
+
+
+def podman_scope_for_service(service: dict[str, Any]) -> str:
+    if service.get("scope") is not None:
+        return podman_scope_from_value(require_string(service.get("scope"), "scope"))
+    if service.get("rootless_user") is not None:
+        return podman_scope_from_value(
+            require_string(service.get("rootless_user"), "rootless_user")
+        )
+    return "root"
+
+
+def podman_rootless_uid_for_service(service: dict[str, Any]) -> int:
+    if service.get("rootless_uid") is not None:
+        return require_uid(service.get("rootless_uid"), "rootless_uid")
+
+    user = require_string(service.get("rootless_user"), "rootless_user")
+    uid = user_uid(user)
+    if uid is None:
+        raise RuntimeError(f"rootless_user does not exist: {user}")
+    return uid
 
 
 def require_gpu_index(value: object, name: str) -> int:
@@ -808,6 +990,8 @@ def service_component(service: dict[str, Any]) -> str:
         return require_string(service.get("dev"), "network dev")
     if service_type == "docker_containers":
         return "docker-containers"
+    if service_type == "podman_containers":
+        return f"podman-containers-{podman_scope_for_service(service)}"
     if service_type == "frigate":
         return "frigate"
     if service_type == "asus_router_network":
@@ -836,6 +1020,8 @@ def service_unit_name(device: str, service: dict[str, Any]) -> str:
         suffix = f"network-{component}"
     elif service_type == "docker_containers":
         suffix = "docker-containers"
+    elif service_type == "podman_containers":
+        suffix = component
     elif service_type == "frigate":
         suffix = "frigate"
     elif service_type == "asus_router_cpu":
@@ -868,6 +1054,11 @@ def service_description(device: str, service: dict[str, Any]) -> str:
         return f"Homelab HA Discovery network metrics for {device} {component}"
     if service_type == "docker_containers":
         return f"Homelab HA Discovery Docker container metrics for {device}"
+    if service_type == "podman_containers":
+        return (
+            "Homelab HA Discovery Podman container metrics "
+            f"for {device} {podman_scope_for_service(service)}"
+        )
     if service_type == "frigate":
         return f"Homelab HA Discovery Frigate metrics for {device}"
     if service_type == "asus_router_cpu":
@@ -914,7 +1105,7 @@ def service_command(
     if service_type == "docker_containers":
         if service.get("all"):
             command.append("--all")
-        for label in docker_include_labels(service):
+        for label in container_include_labels(service):
             command.extend(["--include-label", label])
         if service.get("docker_command") is not None:
             command.extend(
@@ -923,6 +1114,21 @@ def service_command(
                     require_string(service.get("docker_command"), "docker_command"),
                 ]
             )
+        if service.get("debug"):
+            command.append("--debug")
+    if service_type == "podman_containers":
+        if service.get("all"):
+            command.append("--all")
+        for label in container_include_labels(service):
+            command.extend(["--include-label", label])
+        if service.get("podman_command") is not None:
+            command.extend(
+                [
+                    "--podman-command",
+                    require_string(service.get("podman_command"), "podman_command"),
+                ]
+            )
+        command.extend(["--podman-scope", podman_scope_for_service(service)])
         if service.get("debug"):
             command.append("--debug")
     if service_type == "frigate":
@@ -1038,6 +1244,30 @@ def render_unit(
         systemd_arg(arg)
         for arg in service_command(paths, device, service, discovery_timer)
     )
+    service_lines = ["Type=simple"]
+    if require_string(service.get("type"), "service type") == "podman_containers":
+        if service.get("rootless_user") is not None:
+            rootless_user = require_string(
+                service.get("rootless_user"),
+                "rootless_user",
+            )
+            rootless_uid = podman_rootless_uid_for_service(service)
+            service_lines.extend(
+                (
+                    f"User={rootless_user}",
+                    f"Environment=XDG_RUNTIME_DIR=/run/user/{rootless_uid}",
+                )
+            )
+    service_lines.extend(
+        (
+            f"WorkingDirectory={systemd_arg(paths.app_dir)}",
+            f"EnvironmentFile=-{systemd_arg(paths.mqtt_env_path)}",
+            f"Environment={SKIP_ENV_FILES_ENV}=1",
+            f"ExecStart={command}",
+            "Restart=always",
+            "RestartSec=60s",
+        )
+    )
     content = "\n".join(
         (
             "# Generated by homelab-ha-discovery.",
@@ -1048,12 +1278,7 @@ def render_unit(
             "After=network-online.target",
             "",
             "[Service]",
-            "Type=simple",
-            f"WorkingDirectory={systemd_arg(paths.app_dir)}",
-            f"EnvironmentFile=-{systemd_arg(paths.mqtt_env_path)}",
-            f"ExecStart={command}",
-            "Restart=always",
-            "RestartSec=60s",
+            *service_lines,
             "",
             "[Install]",
             "WantedBy=multi-user.target",
@@ -1220,6 +1445,7 @@ def command_bootstrap(args: argparse.Namespace) -> int:
         write_detected_config(
             paths,
             args.device,
+            rootless_podman_users=args.rootless_podman_user,
             force=args.force_config,
             dry_run=args.dry_run,
             force_option="--force-config",
@@ -1237,6 +1463,7 @@ def command_detect(args: argparse.Namespace) -> int:
         write_detected_config(
             paths,
             args.device,
+            rootless_podman_users=args.rootless_podman_user,
             force=args.force,
             dry_run=args.dry_run,
             force_option="--force",
@@ -1466,6 +1693,16 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Install Debian packages with apt-get before bootstrapping.",
     )
+    bootstrap_parser.add_argument(
+        "--rootless-podman-user",
+        action="append",
+        default=[],
+        metavar="USER",
+        help=(
+            "Detect rootless Podman containers for USER. Repeat for multiple "
+            "users."
+        ),
+    )
     bootstrap_parser.set_defaults(func=command_bootstrap)
 
     detect_parser = subparsers.add_parser(
@@ -1483,6 +1720,16 @@ def build_parser() -> argparse.ArgumentParser:
         "--force",
         action="store_true",
         help="Replace an existing host-metrics.json.",
+    )
+    detect_parser.add_argument(
+        "--rootless-podman-user",
+        action="append",
+        default=[],
+        metavar="USER",
+        help=(
+            "Detect rootless Podman containers for USER. Repeat for multiple "
+            "users."
+        ),
     )
     detect_parser.set_defaults(func=command_detect)
 

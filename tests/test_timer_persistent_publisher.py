@@ -17,9 +17,15 @@ from homelab_ha_discovery.collectors.docker_containers import (
     DockerContainerStats,
 )
 from homelab_ha_discovery.collectors.network_linux import NetworkCounterSample
+from homelab_ha_discovery.collectors.podman_containers import (
+    PodmanContainerInfo,
+    PodmanContainerSample,
+    PodmanContainerStats,
+)
 from homelab_ha_discovery.scripts import publish_cpu_metrics
 from homelab_ha_discovery.scripts import publish_docker_container_metrics
 from homelab_ha_discovery.scripts import publish_network_metrics
+from homelab_ha_discovery.scripts import publish_podman_container_metrics
 
 
 class FakePersistentPublisher:
@@ -74,6 +80,39 @@ class PersistentTimerPublisherTest(unittest.TestCase):
             },
             stats={
                 container_id: DockerContainerStats(
+                    cpu_usage_percent=2.318,
+                    memory_usage_bytes=512_400_000.0,
+                    memory_limit_bytes=8_192_000_000.0,
+                    memory_usage_percent=6.25,
+                    network_rx_bytes=rx_bytes,
+                    network_tx_bytes=tx_bytes,
+                )
+            },
+            timestamp=timestamp,
+        )
+
+    def podman_sample(
+        self,
+        *,
+        timestamp: float,
+        rx_bytes: float,
+        tx_bytes: float,
+    ) -> PodmanContainerSample:
+        container_id = "abc123def456789"
+        return PodmanContainerSample(
+            containers={
+                container_id: PodmanContainerInfo(
+                    container_id=container_id,
+                    name="plex",
+                    component="plex",
+                    state="running",
+                    health="healthy",
+                    restart_count=2,
+                    labels={},
+                )
+            },
+            stats={
+                container_id: PodmanContainerStats(
                     cpu_usage_percent=2.318,
                     memory_usage_bytes=512_400_000.0,
                     memory_limit_bytes=8_192_000_000.0,
@@ -250,6 +289,63 @@ class PersistentTimerPublisherTest(unittest.TestCase):
             [
                 "homelab-ha-discovery/hpc/docker/plex/metrics",
                 "homelab-ha-discovery/hpc/docker/plex/metrics",
+            ],
+        )
+
+    def test_podman_timer_publishes_intervals_through_one_publisher(self) -> None:
+        samples = [
+            self.podman_sample(timestamp=1.0, rx_bytes=1000.0, tx_bytes=2000.0),
+            self.podman_sample(timestamp=2.0, rx_bytes=1125.0, tx_bytes=127000.0),
+            self.podman_sample(timestamp=3.0, rx_bytes=1250.0, tx_bytes=252000.0),
+        ]
+
+        with (
+            patch.object(publish_podman_container_metrics, "load_env_files"),
+            patch.object(
+                publish_podman_container_metrics,
+                "MqttPublisher",
+                FakePersistentPublisher,
+            ),
+            patch.object(
+                publish_podman_container_metrics,
+                "read_podman_container_sample",
+                side_effect=samples,
+            ),
+            patch.object(
+                publish_podman_container_metrics.time,
+                "sleep",
+                side_effect=[None, None, KeyboardInterrupt],
+            ),
+            patch.object(
+                publish_podman_container_metrics,
+                "publish_mqtt_many",
+            ) as publish_many,
+        ):
+            result = publish_podman_container_metrics.run_podman_publish_timer(
+                60.0,
+                "hpc",
+                "root",
+                include_label_selectors=(),
+                publisher_only=True,
+            )
+
+        self.assertEqual(result, 0)
+        publish_many.assert_not_called()
+        self.assertEqual(len(FakePersistentPublisher.instances), 1)
+        publisher = FakePersistentPublisher.instances[0]
+        self.assertEqual(
+            publisher.default_client_id,
+            "homelab-ha-discovery_hpc_podman_root_metrics",
+        )
+        self.assertEqual(publisher.enter_count, 1)
+        self.assertEqual(publisher.exit_count, 1)
+        self.assertEqual(len(publisher.batches), 2)
+        self.assertTrue(all(len(batch) == 1 for batch in publisher.batches))
+        self.assertEqual(
+            [batch[0][0] for batch in publisher.batches],
+            [
+                "homelab-ha-discovery/hpc/podman/root/plex/metrics",
+                "homelab-ha-discovery/hpc/podman/root/plex/metrics",
             ],
         )
 

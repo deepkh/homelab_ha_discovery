@@ -10,9 +10,9 @@
 
 Expose homelab infrastructure metrics as Home Assistant MQTT entities automatically.
 
-This project collects metrics from Debian hosts, Docker containers, Frigate, NVIDIA and
-AMD ROCm GPUs, SMART disks/NVMe devices, Linux network interfaces, and ASUS routers,
-then publishes Home Assistant MQTT discovery config plus metric state.
+This project collects metrics from Debian hosts, Docker/Podman containers, Frigate,
+NVIDIA and AMD ROCm GPUs, SMART disks/NVMe devices, Linux network interfaces, and
+ASUS routers, then publishes Home Assistant MQTT discovery config plus metric state.
 
 ## Why this project?
 
@@ -31,8 +31,9 @@ by hand is repetitive.
 ```text
 +-------------------+      collect       +---------------------+
 | Debian host       | -----------------> | Python publisher    |
-| Docker / Frigate  |                    | collector + parser  |
-| ASUS router SSH   |                    +----------+----------+
+| Docker / Podman   |                    | collector + parser  |
+| Frigate           |                    +----------+----------+
+| ASUS router SSH   |                               |
 +-------------------+                               |
                                                     | publish
                                                     v
@@ -58,6 +59,7 @@ by hand is repetitive.
 | NVMe SMART | warning, spare, percentage used, temperature, written TB |
 | Network | download/upload speed |
 | Docker | state, health, restart count, CPU, memory, network |
+| Podman | state, health, restart count, CPU, memory, network |
 | Frigate | system, camera, detector, GPU, storage metrics |
 | ASUS router | CPU, temperature, network speed, connected clients |
 
@@ -67,7 +69,7 @@ by hand is repetitive.
 - MQTT broker reachable by Home Assistant
 - Home Assistant MQTT integration enabled
 - Linux host for most local collectors
-- Optional: Docker, Frigate, NVIDIA tools, AMD ROCm `rocm-smi`,
+- Optional: Docker, Podman, Frigate, NVIDIA tools, AMD ROCm `rocm-smi`,
   smartmontools, ASUS router SSH access
 
 ## Quick start
@@ -97,7 +99,7 @@ sudo editor /etc/homelab-ha-discovery/mqtt.env
 Example:
 
 ```bash
-HA_MQTT_HOST=192.168.4.27
+HA_MQTT_HOST=192.168.0.2
 HA_MQTT_PORT=1883
 HA_MQTT_TOPIC_PREFIX=homelab-ha-discovery
 HA_MQTT_USERNAME=your-user
@@ -117,6 +119,8 @@ Bootstrap config files:
 ```bash
 sudo python3 src/homelab_ha_discovery/scripts/install_debian_host_systemd.py bootstrap --ha-device-id hpc
 ```
+
+For rootless Podman users, repeat `--rootless-podman-user USER` during bootstrap.
 
 Edit generated config:
 

@@ -71,6 +71,54 @@ Compatibility notes:
 - Existing `gpu_index` configs still work for a single card.
 - Do not set both `gpu_index` and `gpu_indexes`.
 
+### Podman container services
+
+Podman services use `publish_podman_container_metrics.py`. Root Podman uses the
+`root` scope:
+
+```json
+{
+  "type": "podman_containers",
+  "enabled": true,
+  "scope": "root",
+  "include_label": "homelab-ha-discovery.enabled=true",
+  "podman_command": "podman",
+  "timer": 60.0,
+  "expire_after": null
+}
+```
+
+Rootless Podman services run as the configured user. The installer writes
+`User=<rootless_user>` and `XDG_RUNTIME_DIR=/run/user/<rootless_uid>` into the
+generated unit:
+
+```json
+{
+  "type": "podman_containers",
+  "enabled": true,
+  "scope": "alice",
+  "rootless_user": "alice",
+  "rootless_uid": 1001,
+  "include_label": "homelab-ha-discovery.enabled=true",
+  "podman_command": "podman",
+  "timer": 60.0,
+  "expire_after": null
+}
+```
+
+Podman service options:
+
+- `scope` keeps root and rootless MQTT topics/entities distinct.
+- `rootless_user` enables rootless systemd unit rendering.
+- `rootless_uid` is optional when the user exists on the install host, but
+  detected configs include it for repeatability.
+- `all` passes `--all` to include stopped containers.
+- Detected Podman configs default to
+  `include_label: homelab-ha-discovery.enabled=true`, matching Docker, so users
+  opt containers into publishing by label.
+- `include_label` and `include_labels` pass repeated `--include-label` filters.
+- `podman_command` can point to an absolute Podman CLI path.
+
 ## Device ID
 
 Use a stable Home Assistant device ID, for example:

@@ -17,6 +17,7 @@ from homelab_ha_discovery.scripts.install_debian_host_systemd import (
     DEFAULT_FRIGATE_METRICS_URL,
     RuntimePaths,
     build_detected_config,
+    build_parser,
     command_disable,
     command_logs,
     command_restart,
@@ -229,6 +230,97 @@ class InstallDebianHostSystemdTest(unittest.TestCase):
                 "60.0",
             ],
         )
+
+    def test_podman_container_unit_name_and_command(self) -> None:
+        paths = RuntimePaths(
+            app_dir=Path("/opt/homelab-ha-discovery"),
+            config_dir=Path("/etc/homelab-ha-discovery"),
+            systemd_dir=Path("/etc/systemd/system"),
+            source_root=Path("/checkout"),
+        )
+        service = {
+            "type": "podman_containers",
+            "enabled": True,
+            "timer": 60.0,
+            "scope": "root",
+            "include_label": "homelab-ha-discovery.enabled=true",
+            "include_labels": ["tier=media"],
+            "podman_command": "/usr/bin/podman",
+            "all": True,
+            "expire_after": 0,
+            "debug": True,
+        }
+
+        self.assertEqual(
+            service_unit_name("hpc", service),
+            "homelab-ha-discovery-hpc-podman-containers-root.service",
+        )
+
+        command = service_command(paths, "hpc", service, discovery_timer=60.0)
+        self.assertEqual(
+            command,
+            [
+                "/opt/homelab-ha-discovery/.venv/bin/python",
+                (
+                    "/opt/homelab-ha-discovery/src/homelab_ha_discovery/scripts/"
+                    "publish_podman_container_metrics.py"
+                ),
+                "--ha-device-id",
+                "hpc",
+                "--all",
+                "--include-label",
+                "homelab-ha-discovery.enabled=true",
+                "--include-label",
+                "tier=media",
+                "--podman-command",
+                "/usr/bin/podman",
+                "--podman-scope",
+                "root",
+                "--debug",
+                "--expire-after",
+                "0.0",
+                "--timer",
+                "60.0",
+                "--timer-publish-discovery-config",
+                "60.0",
+            ],
+        )
+
+    def test_rootless_podman_unit_sets_user_and_runtime_dir(self) -> None:
+        paths = RuntimePaths(
+            app_dir=Path("/opt/homelab-ha-discovery"),
+            config_dir=Path("/etc/homelab-ha-discovery"),
+            systemd_dir=Path("/etc/systemd/system"),
+            source_root=Path("/checkout"),
+        )
+        service = {
+            "type": "podman_containers",
+            "enabled": True,
+            "timer": 60.0,
+            "scope": "alice",
+            "rootless_user": "alice",
+            "rootless_uid": 1001,
+            "podman_command": "/usr/bin/podman",
+        }
+
+        self.assertEqual(
+            service_unit_name("hpc", service),
+            "homelab-ha-discovery-hpc-podman-containers-alice.service",
+        )
+
+        command = service_command(paths, "hpc", service, discovery_timer=60.0)
+        self.assertIn("--podman-scope", command)
+        self.assertIn("alice", command)
+
+        unit = render_unit(paths, "hpc", service, discovery_timer=60.0)
+        self.assertIn("User=alice\n", unit.content)
+        self.assertIn("Environment=XDG_RUNTIME_DIR=/run/user/1001\n", unit.content)
+        self.assertIn(
+            "EnvironmentFile=-/etc/homelab-ha-discovery/mqtt.env\n"
+            "Environment=HOMELAB_HA_DISCOVERY_SKIP_ENV_FILES=1\n",
+            unit.content,
+        )
+        self.assertIn("--podman-scope alice", unit.content)
 
     def test_frigate_unit_name_and_command(self) -> None:
         paths = RuntimePaths(
@@ -628,6 +720,121 @@ class InstallDebianHostSystemdTest(unittest.TestCase):
                 }
             ],
         )
+
+    def test_detected_config_includes_podman_root_and_rootless_entries(self) -> None:
+        def command_exists(command: str) -> bool:
+            return command in {"podman", "runuser"}
+
+        def detect_podman_has_running_containers(
+            podman_command: str,
+            rootless_user: str | None = None,
+            rootless_uid: int | None = None,
+        ) -> bool:
+            return rootless_user in {None, "alice"}
+
+        with (
+            patch(
+                "homelab_ha_discovery.scripts.install_debian_host_systemd."
+                "command_exists",
+                side_effect=command_exists,
+            ),
+            patch(
+                "homelab_ha_discovery.scripts.install_debian_host_systemd."
+                "shutil.which",
+                return_value="/usr/bin/podman",
+            ),
+            patch(
+                "homelab_ha_discovery.scripts.install_debian_host_systemd."
+                "detect_podman_has_running_containers",
+                side_effect=detect_podman_has_running_containers,
+            ),
+            patch(
+                "homelab_ha_discovery.scripts.install_debian_host_systemd."
+                "user_uid",
+                return_value=1001,
+            ),
+            patch(
+                "homelab_ha_discovery.scripts.install_debian_host_systemd."
+                "command_has_output",
+                return_value=False,
+            ),
+            patch(
+                "homelab_ha_discovery.scripts.install_debian_host_systemd."
+                "detect_disk_devices",
+                return_value=[],
+            ),
+            patch(
+                "homelab_ha_discovery.scripts.install_debian_host_systemd."
+                "detect_nvme_devices",
+                return_value=[],
+            ),
+            patch(
+                "homelab_ha_discovery.scripts.install_debian_host_systemd."
+                "detect_network_interfaces",
+                return_value=[],
+            ),
+            patch(
+                "homelab_ha_discovery.scripts.install_debian_host_systemd."
+                "http_url_reachable",
+                return_value=False,
+            ),
+        ):
+            config = build_detected_config(
+                "hpc",
+                rootless_podman_users=["alice", "alice"],
+            )
+
+        podman_entries = [
+            service
+            for service in config["services"]
+            if service["type"] == "podman_containers"
+        ]
+        self.assertEqual(
+            podman_entries,
+            [
+                {
+                    "type": "podman_containers",
+                    "enabled": True,
+                    "timer": 60.0,
+                    "expire_after": None,
+                    "scope": "root",
+                    "include_label": "homelab-ha-discovery.enabled=true",
+                    "podman_command": "/usr/bin/podman",
+                    "missing_requirements": [],
+                    "note": "publishes running root Podman containers",
+                },
+                {
+                    "type": "podman_containers",
+                    "enabled": True,
+                    "timer": 60.0,
+                    "expire_after": None,
+                    "scope": "alice",
+                    "rootless_user": "alice",
+                    "include_label": "homelab-ha-discovery.enabled=true",
+                    "podman_command": "/usr/bin/podman",
+                    "missing_requirements": [],
+                    "note": (
+                        "publishes running rootless Podman containers for alice"
+                    ),
+                    "rootless_uid": 1001,
+                },
+            ],
+        )
+
+    def test_rootless_podman_user_option_is_repeatable(self) -> None:
+        args = build_parser().parse_args(
+            [
+                "detect",
+                "--ha-device-id",
+                "hpc",
+                "--rootless-podman-user",
+                "alice",
+                "--rootless-podman-user",
+                "media",
+            ]
+        )
+
+        self.assertEqual(args.rootless_podman_user, ["alice", "media"])
 
     def test_detected_config_enables_frigate_when_metrics_are_reachable(self) -> None:
         with (

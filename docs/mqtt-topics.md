@@ -50,6 +50,17 @@ homelab-ha-discovery/gpu/amd_rocm/usages/<device>/gpu0
 NVIDIA keeps the original GPU topic shape. AMD ROCm includes the collector name
 to avoid collisions when a host publishes multiple GPU backends.
 
+Container examples:
+
+```text
+homelab-ha-discovery/hpc/docker/plex/metrics
+homelab-ha-discovery/hpc/podman/root/plex/metrics
+homelab-ha-discovery/hpc/podman/alice/plex/metrics
+```
+
+Podman topics include a scope segment so root containers and rootless users do not
+share MQTT state topics or Home Assistant discovery IDs.
+
 ## Stability rule
 
 Do not casually change:

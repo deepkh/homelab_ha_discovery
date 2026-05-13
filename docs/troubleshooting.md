@@ -67,6 +67,31 @@ rocm-smi --showproductname --showuse --showmemuse --showtemp --json
 
 If `rocm-smi` fails or returns no cards, fix the AMD ROCm driver/tooling first.
 
+## Podman metrics missing
+
+Check root Podman:
+
+```bash
+podman ps
+podman stats --no-stream --format=json
+```
+
+For rootless Podman, run the same commands as the configured user and verify the
+generated service has the expected runtime directory:
+
+```bash
+sudo systemctl cat homelab-ha-discovery-<name>.service
+```
+
+If `/run/user/<uid>` is missing for a rootless service, enable linger for that user
+or make sure the user's session services are running.
+
+If a rootless service logs `Could not read env file ... mqtt.env ... Permission
+denied`, regenerate the systemd units with the current installer and restart the
+service. The generated unit should include
+`HOMELAB_HA_DISCOVERY_SKIP_ENV_FILES=1`; do not loosen `mqtt.env` permissions to
+work around this.
+
 ## Router metrics missing
 
 Check:

@@ -7,6 +7,12 @@ import sys
 
 
 ENV_SOURCES: dict[str, str] = {}
+SKIP_ENV_FILES_ENV = "HOMELAB_HA_DISCOVERY_SKIP_ENV_FILES"
+TRUE_ENV_VALUES = {"1", "true", "yes", "on"}
+
+
+def skip_env_files_enabled() -> bool:
+    return os.environ.get(SKIP_ENV_FILES_ENV, "").strip().lower() in TRUE_ENV_VALUES
 
 
 def env_source(name: str) -> str:
@@ -56,5 +62,7 @@ def load_env_file(path: str) -> None:
 
 
 def load_env_files(paths: tuple[str, ...]) -> None:
+    if skip_env_files_enabled():
+        return
     for path in paths:
         load_env_file(path)

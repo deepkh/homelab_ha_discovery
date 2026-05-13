@@ -2,9 +2,9 @@
 
 自動將 homelab 基礎設施的監控資料，發布成 Home Assistant MQTT entities。
 
-這個專案會收集 Debian 主機、Docker container、Frigate、NVIDIA/AMD ROCm GPU、
-SMART 硬碟/NVMe、Linux network interface、ASUS router 等資料，並透過 MQTT
-發布 Home Assistant discovery config 與 state。
+這個專案會收集 Debian 主機、Docker/Podman container、Frigate、
+NVIDIA/AMD ROCm GPU、SMART 硬碟/NVMe、Linux network interface、ASUS router
+等資料，並透過 MQTT 發布 Home Assistant discovery config 與 state。
 
 ## 為什麼需要這個專案？
 
@@ -23,8 +23,9 @@ payload 都手寫，會非常重複且容易出錯。
 ```text
 +-------------------+      collect       +---------------------+
 | Debian host       | -----------------> | Python publisher    |
-| Docker / Frigate  |                    | collector + parser  |
-| ASUS router SSH   |                    +----------+----------+
+| Docker / Podman   |                    | collector + parser  |
+| Frigate           |                    +----------+----------+
+| ASUS router SSH   |                               |
 +-------------------+                               |
                                                     | publish
                                                     v
@@ -50,6 +51,7 @@ payload 都手寫，會非常重複且容易出錯。
 | NVMe SMART | warning、spare、percentage used、temperature、written TB |
 | Network | download/upload speed |
 | Docker | state、health、restart count、CPU、memory、network |
+| Podman | state、health、restart count、CPU、memory、network |
 | Frigate | system、camera、detector、GPU、storage metrics |
 | ASUS router | CPU、temperature、network speed、connected clients |
 
@@ -59,7 +61,7 @@ payload 都手寫，會非常重複且容易出錯。
 - Home Assistant 可以連線的 MQTT broker
 - Home Assistant 已啟用 MQTT integration
 - 多數 local collector 需要 Linux host
-- 選配：Docker、Frigate、NVIDIA tools、AMD ROCm `rocm-smi`、
+- 選配：Docker、Podman、Frigate、NVIDIA tools、AMD ROCm `rocm-smi`、
   smartmontools、ASUS router SSH access
 
 ## 快速開始
@@ -109,6 +111,8 @@ python3 src/homelab_ha_discovery/scripts/publish_cpu_metrics.py --ha-device-id h
 ```bash
 sudo python3 src/homelab_ha_discovery/scripts/install_debian_host_systemd.py bootstrap --ha-device-id hpc
 ```
+
+如果要偵測 rootless Podman，bootstrap 時可重複加入 `--rootless-podman-user USER`。
 
 編輯設定：
 

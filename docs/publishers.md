@@ -72,6 +72,45 @@ When `--gpu` is repeated, the selected cards are collected and published in one
 state payload for that timer cycle. Without `--gpu`, the publisher publishes all
 cards returned by the selected collector.
 
+## Container publishers
+
+Docker and Podman container publishers report the same metric set:
+
+- state
+- health
+- restart count
+- CPU usage percent
+- memory usage, limit, and percent
+- download/upload speed
+
+Docker example:
+
+```bash
+python3 src/homelab_ha_discovery/scripts/publish_docker_container_metrics.py --ha-device-id hpc
+```
+
+Podman root example:
+
+```bash
+python3 src/homelab_ha_discovery/scripts/publish_podman_container_metrics.py --ha-device-id hpc --podman-scope root
+```
+
+Podman rootless example when run as that user:
+
+```bash
+python3 src/homelab_ha_discovery/scripts/publish_podman_container_metrics.py --ha-device-id hpc --podman-scope alice
+```
+
+The systemd installer renders rootless Podman units with `User=` and
+`XDG_RUNTIME_DIR=` when `rootless_user` is set in `host-metrics.json`.
+Detected Docker and Podman service configs default to
+`include_label: homelab-ha-discovery.enabled=true`, so containers are published
+only after being opted in with that label.
+
+Podman rootless networking may not expose network counters through `podman stats`.
+When Podman reports `-- / --` for network I/O, the publisher emits zero network
+speed instead of failing the publish cycle.
+
 ## Adding a publisher
 
 Recommended structure:
