@@ -33,6 +33,10 @@ GENERATED_BY = "install_debian_host_systemd.py"
 def build_detected_config(
     device: str,
     rootless_podman_users: list[str] | tuple[str, ...] = (),
+    include_podman: bool = True,
+    podman_socket: str | None = None,
+    rootless_podman_uids: list[int] | tuple[int, ...] = (),
+    auto_discover_rootless_podman: bool = False,
 ) -> dict[str, Any]:
     services: list[dict[str, Any]] = []
 
@@ -132,7 +136,15 @@ def build_detected_config(
             ),
         )
     )
-    services.extend(detected_podman_service_entries(rootless_podman_users))
+    if include_podman:
+        services.extend(
+            detected_podman_service_entries(
+                rootless_podman_users,
+                podman_socket=podman_socket,
+                rootless_podman_uids=rootless_podman_uids,
+                auto_discover_rootless_podman=auto_discover_rootless_podman,
+            )
+        )
     frigate_reachable = http_url_reachable(DEFAULT_FRIGATE_METRICS_URL)
     frigate_values: dict[str, Any] = {
         "url": DEFAULT_FRIGATE_METRICS_URL,

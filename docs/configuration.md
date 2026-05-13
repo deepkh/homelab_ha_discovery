@@ -13,7 +13,7 @@ Default path:
 Example:
 
 ```bash
-HA_MQTT_HOST=192.168.4.27
+HA_MQTT_HOST=192.168.0.2
 HA_MQTT_PORT=1883
 HA_MQTT_TOPIC_PREFIX=homelab-ha-discovery
 HA_MQTT_USERNAME=your-user
@@ -118,6 +118,8 @@ Podman service options:
   opt containers into publishing by label.
 - `include_label` and `include_labels` pass repeated `--include-label` filters.
 - `podman_command` can point to an absolute Podman CLI path.
+- `podman_socket` sets `CONTAINER_HOST` in the generated service when a Podman
+  socket should be used explicitly.
 
 ## Device ID
 

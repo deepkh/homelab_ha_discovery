@@ -91,7 +91,7 @@ sudo editor /etc/homelab-ha-discovery/mqtt.env
 範例：
 
 ```bash
-HA_MQTT_HOST=192.168.4.27
+HA_MQTT_HOST=192.168.0.2
 HA_MQTT_PORT=1883
 HA_MQTT_TOPIC_PREFIX=homelab-ha-discovery
 HA_MQTT_USERNAME=your-user
@@ -109,7 +109,7 @@ python3 src/homelab_ha_discovery/scripts/publish_cpu_metrics.py --ha-device-id h
 產生設定檔：
 
 ```bash
-sudo python3 src/homelab_ha_discovery/scripts/install_debian_host_systemd.py bootstrap --ha-device-id hpc
+sudo ./scripts/bootstrap-debian-host.sh --ha-device-id hpc
 ```
 
 如果要偵測 rootless Podman，bootstrap 時可重複加入 `--rootless-podman-user USER`。
@@ -121,18 +121,20 @@ sudo editor /etc/homelab-ha-discovery/mqtt.env
 sudo editor /etc/homelab-ha-discovery/host-metrics.json
 ```
 
-從 `/opt/homelab-ha-discovery` 的 managed copy 安裝 systemd services：
+Render 並啟用 services：
 
 ```bash
-sudo python3 /opt/homelab-ha-discovery/src/homelab_ha_discovery/scripts/install_debian_host_systemd.py install
-sudo python3 /opt/homelab-ha-discovery/src/homelab_ha_discovery/scripts/install_debian_host_systemd.py enable --now
+sudo hhdctl systemd render
+sudo hhdctl systemd enable --now
 ```
 
 檢查 logs：
 
 ```bash
-journalctl -u 'homelab-ha-discovery-*' -f
+sudo hhdctl systemd logs --follow
 ```
+
+`install_debian_host_systemd.py` 仍可相容使用，但建議新安裝改用 `hhdctl`。
 
 ## 文件
 

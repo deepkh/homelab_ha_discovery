@@ -422,6 +422,14 @@ def render_unit(
     )
     service_lines = ["Type=simple"]
     if require_string(service.get("type"), "service type") == "podman_containers":
+        if service.get("podman_socket") is not None:
+            podman_socket = require_string(
+                service.get("podman_socket"),
+                "podman_socket",
+            )
+            service_lines.append(
+                f"Environment={systemd_arg(f'CONTAINER_HOST={podman_socket}')}"
+            )
         if service.get("rootless_user") is not None:
             rootless_user = require_string(
                 service.get("rootless_user"),

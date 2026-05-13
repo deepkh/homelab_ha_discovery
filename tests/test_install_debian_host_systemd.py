@@ -29,6 +29,7 @@ from homelab_ha_discovery.scripts.install_debian_host_systemd import (
     service_command,
     service_unit_name,
 )
+from homelab_ha_discovery.installer.cli import build_parser as build_hhdctl_parser
 
 
 class InstallDebianHostSystemdTest(unittest.TestCase):
@@ -321,6 +322,29 @@ class InstallDebianHostSystemdTest(unittest.TestCase):
             unit.content,
         )
         self.assertIn("--podman-scope alice", unit.content)
+
+    def test_podman_socket_unit_sets_container_host(self) -> None:
+        paths = RuntimePaths(
+            app_dir=Path("/opt/homelab-ha-discovery"),
+            config_dir=Path("/etc/homelab-ha-discovery"),
+            systemd_dir=Path("/etc/systemd/system"),
+            source_root=Path("/checkout"),
+        )
+        service = {
+            "type": "podman_containers",
+            "enabled": True,
+            "scope": "root",
+            "timer": 60.0,
+            "podman_command": "/usr/bin/podman",
+            "podman_socket": "unix:///run/podman/podman.sock",
+        }
+
+        unit = render_unit(paths, "hpc", service, discovery_timer=60.0)
+
+        self.assertIn(
+            "Environment=CONTAINER_HOST=unix:///run/podman/podman.sock\n",
+            unit.content,
+        )
 
     def test_frigate_unit_name_and_command(self) -> None:
         paths = RuntimePaths(
@@ -835,6 +859,29 @@ class InstallDebianHostSystemdTest(unittest.TestCase):
         )
 
         self.assertEqual(args.rootless_podman_user, ["alice", "media"])
+
+    def test_hhdctl_config_detect_accepts_podman_options(self) -> None:
+        args = build_hhdctl_parser().parse_args(
+            [
+                "config",
+                "detect",
+                "--ha-device-id",
+                "hpc",
+                "--include-podman",
+                "--podman-socket",
+                "/run/podman/podman.sock",
+                "--rootless-podman-uid",
+                "1001",
+                "--auto-discover-rootless-podman",
+            ]
+        )
+
+        self.assertEqual(args.group, "config")
+        self.assertEqual(args.command, "detect")
+        self.assertTrue(args.include_podman)
+        self.assertEqual(args.podman_socket, "/run/podman/podman.sock")
+        self.assertEqual(args.rootless_podman_uid, [1001])
+        self.assertTrue(args.auto_discover_rootless_podman)
 
     def test_detected_config_enables_frigate_when_metrics_are_reachable(self) -> None:
         with (

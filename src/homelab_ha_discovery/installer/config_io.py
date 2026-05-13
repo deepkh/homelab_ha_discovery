@@ -152,12 +152,20 @@ def write_detected_config(
     force: bool,
     dry_run: bool,
     force_option: str,
+    include_podman: bool = True,
+    podman_socket: str | None = None,
+    rootless_podman_uids: list[int] | tuple[int, ...] = (),
+    auto_discover_rootless_podman: bool = False,
 ) -> None:
     from homelab_ha_discovery.installer.detect.config import build_detected_config
 
     config = build_detected_config(
         device,
         rootless_podman_users=rootless_podman_users,
+        include_podman=include_podman,
+        podman_socket=podman_socket,
+        rootless_podman_uids=rootless_podman_uids,
+        auto_discover_rootless_podman=auto_discover_rootless_podman,
     )
     if paths.config_path.exists() and not force:
         print(
@@ -255,6 +263,14 @@ def command_detect(args: argparse.Namespace) -> int:
             force=args.force,
             dry_run=args.dry_run,
             force_option="--force",
+            include_podman=getattr(args, "include_podman", True),
+            podman_socket=getattr(args, "podman_socket", None),
+            rootless_podman_uids=getattr(args, "rootless_podman_uid", ()),
+            auto_discover_rootless_podman=getattr(
+                args,
+                "auto_discover_rootless_podman",
+                False,
+            ),
         )
     except (OSError, RuntimeError) as exc:
         print(f"Error: {exc}", file=sys.stderr)

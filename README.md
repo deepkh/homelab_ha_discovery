@@ -117,7 +117,7 @@ python3 src/homelab_ha_discovery/scripts/publish_cpu_metrics.py --ha-device-id h
 Bootstrap config files:
 
 ```bash
-sudo python3 src/homelab_ha_discovery/scripts/install_debian_host_systemd.py bootstrap --ha-device-id hpc
+sudo ./scripts/bootstrap-debian-host.sh --ha-device-id hpc
 ```
 
 For rootless Podman users, repeat `--rootless-podman-user USER` during bootstrap.
@@ -129,18 +129,21 @@ sudo editor /etc/homelab-ha-discovery/mqtt.env
 sudo editor /etc/homelab-ha-discovery/host-metrics.json
 ```
 
-Install services from the managed copy:
+Render and enable services:
 
 ```bash
-sudo python3 /opt/homelab-ha-discovery/src/homelab_ha_discovery/scripts/install_debian_host_systemd.py install
-sudo python3 /opt/homelab-ha-discovery/src/homelab_ha_discovery/scripts/install_debian_host_systemd.py enable --now
+sudo hhdctl systemd render
+sudo hhdctl systemd enable --now
 ```
 
 Check logs:
 
 ```bash
-journalctl -u 'homelab-ha-discovery-*' -f
+sudo hhdctl systemd logs --follow
 ```
+
+`install_debian_host_systemd.py` remains available for compatibility, but
+`hhdctl` is the preferred installer interface.
 
 ## Documentation
 
@@ -171,8 +174,3 @@ pytest
 ## License
 
 MIT
-
-
-## License
-
-This project is licensed under the MIT License. See [LICENSE](LICENSE).

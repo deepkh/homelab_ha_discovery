@@ -123,6 +123,14 @@ def command_bootstrap(args) -> int:
             force=args.force_config,
             dry_run=args.dry_run,
             force_option="--force-config",
+            include_podman=getattr(args, "include_podman", True),
+            podman_socket=getattr(args, "podman_socket", None),
+            rootless_podman_uids=getattr(args, "rootless_podman_uid", ()),
+            auto_discover_rootless_podman=getattr(
+                args,
+                "auto_discover_rootless_podman",
+                False,
+            ),
         )
     except (OSError, RuntimeError, subprocess.CalledProcessError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
