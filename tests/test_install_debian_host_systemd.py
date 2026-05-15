@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from argparse import Namespace
+from contextlib import redirect_stdout
+import io
 import json
 from pathlib import Path
 import sys
@@ -470,6 +472,48 @@ class InstallDebianHostSystemdTest(unittest.TestCase):
             ],
         )
 
+    def test_intel_qsv_gpu_index_unit_name_and_command(self) -> None:
+        paths = RuntimePaths(
+            app_dir=Path("/opt/homelab-ha-discovery"),
+            config_dir=Path("/etc/homelab-ha-discovery"),
+            systemd_dir=Path("/etc/systemd/system"),
+            source_root=Path("/checkout"),
+        )
+        service = {
+            "type": "gpu",
+            "enabled": True,
+            "collector": "intel-qsv",
+            "timer": 5.0,
+            "gpu_indexes": [0],
+        }
+
+        self.assertEqual(
+            service_unit_name("hpc", service),
+            "homelab-ha-discovery-hpc-intel-qsv-gpu0.service",
+        )
+
+        command = service_command(paths, "hpc", service, discovery_timer=60.0)
+        self.assertEqual(
+            command,
+            [
+                "/opt/homelab-ha-discovery/.venv/bin/python",
+                (
+                    "/opt/homelab-ha-discovery/src/homelab_ha_discovery/scripts/"
+                    "publish_gpu_metrics.py"
+                ),
+                "--ha-device-id",
+                "hpc",
+                "--collector",
+                "intel_qsv",
+                "--gpu",
+                "0",
+                "--timer",
+                "5.0",
+                "--timer-publish-discovery-config",
+                "60.0",
+            ],
+        )
+
     def test_parse_gpu_detection_outputs(self) -> None:
         self.assertEqual(
             parse_nvidia_gpu_indexes(
@@ -489,9 +533,15 @@ class InstallDebianHostSystemdTest(unittest.TestCase):
             [0, 1],
         )
 
-    def test_detected_config_includes_nvidia_and_amd_rocm_gpu_entries(self) -> None:
+    def test_detected_config_includes_gpu_backend_entries(self) -> None:
         def command_exists(command: str) -> bool:
-            return command in {"top", "sensors", "nvidia-smi", "rocm-smi"}
+            return command in {
+                "top",
+                "sensors",
+                "nvidia-smi",
+                "rocm-smi",
+                "intel_gpu_top",
+            }
 
         with (
             patch(
@@ -508,6 +558,14 @@ class InstallDebianHostSystemdTest(unittest.TestCase):
                 "homelab_ha_discovery.scripts.install_debian_host_systemd."
                 "detect_amd_rocm_gpu_indexes",
                 return_value=[0],
+            ),
+            patch(
+                "homelab_ha_discovery.scripts.install_debian_host_systemd."
+                "detect_intel_qsv_gpu_devices",
+                return_value={
+                    "render_device": "/dev/dri/renderD128",
+                    "drm_device": "/dev/dri/card0",
+                },
             ),
             patch(
                 "homelab_ha_discovery.scripts.install_debian_host_systemd."
@@ -530,7 +588,9 @@ class InstallDebianHostSystemdTest(unittest.TestCase):
                 return_value=False,
             ),
         ):
-            config = build_detected_config("hpc")
+            stdout = io.StringIO()
+            with redirect_stdout(stdout):
+                config = build_detected_config("hpc")
 
         gpu_entries = [
             service for service in config["services"] if service["type"] == "gpu"
@@ -558,7 +618,159 @@ class InstallDebianHostSystemdTest(unittest.TestCase):
                     "missing_requirements": [],
                     "note": "publishes selected AMD ROCm GPUs in one timer loop",
                 },
+                {
+                    "type": "gpu",
+                    "enabled": True,
+                    "timer": 5.0,
+                    "expire_after": None,
+                    "collector": "intel_qsv",
+                    "gpu_indexes": [0],
+                    "missing_requirements": [],
+                    "render_device": "/dev/dri/renderD128",
+                    "drm_device": "/dev/dri/card0",
+                    "note": (
+                        "publishes Intel QSV media engine metrics in one timer loop"
+                    ),
+                },
             ],
+        )
+        self.assertIn(
+            "Intel QSV detection: DRI devices found "
+            "render_device=/dev/dri/renderD128 drm_device=/dev/dri/card0",
+            stdout.getvalue(),
+        )
+        self.assertIn(
+            "Intel QSV detection: found; enabling intel_qsv GPU service",
+            stdout.getvalue(),
+        )
+
+    def test_detected_config_disables_intel_qsv_when_tooling_is_missing(self) -> None:
+        def command_exists(command: str) -> bool:
+            return command in {"top", "sensors"}
+
+        with (
+            patch(
+                "homelab_ha_discovery.scripts.install_debian_host_systemd."
+                "command_exists",
+                side_effect=command_exists,
+            ),
+            patch(
+                "homelab_ha_discovery.scripts.install_debian_host_systemd."
+                "detect_intel_qsv_gpu_devices",
+                return_value={
+                    "render_device": "/dev/dri/renderD128",
+                    "drm_device": "/dev/dri/card0",
+                },
+            ),
+            patch(
+                "homelab_ha_discovery.scripts.install_debian_host_systemd."
+                "detect_disk_devices",
+                return_value=[],
+            ),
+            patch(
+                "homelab_ha_discovery.scripts.install_debian_host_systemd."
+                "detect_nvme_devices",
+                return_value=[],
+            ),
+            patch(
+                "homelab_ha_discovery.scripts.install_debian_host_systemd."
+                "detect_network_interfaces",
+                return_value=[],
+            ),
+            patch(
+                "homelab_ha_discovery.scripts.install_debian_host_systemd."
+                "http_url_reachable",
+                return_value=False,
+            ),
+        ):
+            stdout = io.StringIO()
+            with redirect_stdout(stdout):
+                config = build_detected_config("hpc")
+
+        intel_entries = [
+            service
+            for service in config["services"]
+            if service["type"] == "gpu" and service["collector"] == "intel_qsv"
+        ]
+        self.assertEqual(
+            intel_entries,
+            [
+                {
+                    "type": "gpu",
+                    "enabled": False,
+                    "timer": 5.0,
+                    "expire_after": None,
+                    "collector": "intel_qsv",
+                    "gpu_indexes": [0],
+                    "missing_requirements": ["intel_gpu_top"],
+                    "render_device": "/dev/dri/renderD128",
+                    "drm_device": "/dev/dri/card0",
+                    "note": (
+                        "disabled template; enable after Intel QSV tooling is "
+                        "available"
+                    ),
+                }
+            ],
+        )
+        self.assertIn(
+            "Intel QSV detection: DRI devices found "
+            "render_device=/dev/dri/renderD128 drm_device=/dev/dri/card0",
+            stdout.getvalue(),
+        )
+        self.assertIn(
+            "Intel QSV detection: disabled; missing intel_gpu_top",
+            stdout.getvalue(),
+        )
+
+    def test_detected_config_logs_when_intel_qsv_is_not_found(self) -> None:
+        with (
+            patch(
+                "homelab_ha_discovery.scripts.install_debian_host_systemd."
+                "command_exists",
+                return_value=False,
+            ),
+            patch(
+                "homelab_ha_discovery.scripts.install_debian_host_systemd."
+                "detect_intel_qsv_gpu_devices",
+                return_value={
+                    "render_device": None,
+                    "drm_device": None,
+                },
+            ),
+            patch(
+                "homelab_ha_discovery.scripts.install_debian_host_systemd."
+                "detect_disk_devices",
+                return_value=[],
+            ),
+            patch(
+                "homelab_ha_discovery.scripts.install_debian_host_systemd."
+                "detect_nvme_devices",
+                return_value=[],
+            ),
+            patch(
+                "homelab_ha_discovery.scripts.install_debian_host_systemd."
+                "detect_network_interfaces",
+                return_value=[],
+            ),
+            patch(
+                "homelab_ha_discovery.scripts.install_debian_host_systemd."
+                "http_url_reachable",
+                return_value=False,
+            ),
+        ):
+            stdout = io.StringIO()
+            with redirect_stdout(stdout):
+                config = build_detected_config("hpc")
+
+        intel_entries = [
+            service
+            for service in config["services"]
+            if service["type"] == "gpu" and service["collector"] == "intel_qsv"
+        ]
+        self.assertEqual(intel_entries, [])
+        self.assertIn(
+            "Intel QSV detection: not found; no /dev/dri/renderD* or card* devices",
+            stdout.getvalue(),
         )
 
     def test_expire_after_is_generic_service_option(self) -> None:

@@ -53,18 +53,30 @@ Backends:
 
 - `--collector nvidia` reads NVIDIA metrics from `nvidia-smi`
 - `--collector amd_rocm` reads AMD ROCm metrics from `rocm-smi`
+- `--collector intel_qsv` reads Intel media engine metrics from `intel_gpu_top -J`
 
-Published metrics per GPU card:
+Published NVIDIA/AMD metrics per GPU card:
 
 - GPU usage percent
 - memory usage percent
 - temperature in Celsius
+
+Published Intel QSV metrics:
+
+- Render/3D engine busy percent
+- Blitter engine busy percent
+- Video engine busy percent
+- VideoEnhance engine busy percent
+- Compute engine busy percent
+- QSV active
+- QSV available
 
 Examples:
 
 ```bash
 python3 src/homelab_ha_discovery/scripts/publish_gpu_metrics.py --ha-device-id hpc
 python3 src/homelab_ha_discovery/scripts/publish_gpu_metrics.py --ha-device-id hpc --collector amd_rocm
+python3 src/homelab_ha_discovery/scripts/publish_gpu_metrics.py --ha-device-id hpc --collector intel_qsv
 python3 src/homelab_ha_discovery/scripts/publish_gpu_metrics.py --ha-device-id hpc --gpu 0 --gpu 1
 ```
 

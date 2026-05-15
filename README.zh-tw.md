@@ -3,8 +3,9 @@
 自動將 homelab 基礎設施的監控資料，發布成 Home Assistant MQTT entities。
 
 這個專案會收集 Debian 主機、Docker/Podman container、Frigate、
-NVIDIA/AMD ROCm GPU、SMART 硬碟/NVMe、Linux network interface、ASUS router
-等資料，並透過 MQTT 發布 Home Assistant discovery config 與 state。
+NVIDIA、AMD ROCm、Intel QSV GPU/media engine、SMART 硬碟/NVMe、
+Linux network interface、ASUS router 等資料，並透過 MQTT 發布
+Home Assistant discovery config 與 state。
 
 ## 為什麼需要這個專案？
 
@@ -46,7 +47,7 @@ payload 都手寫，會非常重複且容易出錯。
 | 類型 | 範例 |
 |---|---|
 | CPU | 使用率、溫度 |
-| GPU | NVIDIA/AMD ROCm 使用率、記憶體使用率、溫度 |
+| GPU | NVIDIA/AMD ROCm 使用率、記憶體使用率、溫度；Intel QSV media engine busy |
 | Disk SMART | power-on hours、temperature、reallocated/pending sectors |
 | NVMe SMART | warning、spare、percentage used、temperature、written TB |
 | Network | download/upload speed |
@@ -62,7 +63,8 @@ payload 都手寫，會非常重複且容易出錯。
 - Home Assistant 已啟用 MQTT integration
 - 多數 local collector 需要 Linux host
 - 選配：Docker、Podman、Frigate、NVIDIA tools、AMD ROCm `rocm-smi`、
-  smartmontools、ASUS router SSH access
+  Intel `intel-gpu-tools`/`intel_gpu_top`、`vainfo`、smartmontools、
+  ASUS router SSH access
 
 ## 快速開始
 

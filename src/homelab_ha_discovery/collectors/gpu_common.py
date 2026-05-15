@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 
-GpuMetricValue = str | float | int
+GpuMetricValue = str | float | int | bool | None
 GpuMetrics = dict[str, dict[str, GpuMetricValue]]
 
 

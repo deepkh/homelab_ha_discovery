@@ -30,6 +30,21 @@ GPU_METRICS = {
         "Temperature": 62,
     },
 }
+INTEL_QSV_METRICS = {
+    "gpu0": {
+        "GPU Card Name": "Intel GPU",
+        "GPU Usages": 18.4,
+        "Memory Usage": None,
+        "Temperature": None,
+        "QSV Available": True,
+        "QSV Active": True,
+        "Render/3D Busy": 3.2,
+        "Blitter Busy": 0.0,
+        "Video Busy": 18.4,
+        "VideoEnhance Busy": 4.5,
+        "Compute Busy": None,
+    }
+}
 
 
 class FakeMqttPublisher:
@@ -124,6 +139,76 @@ class PublishGpuMetricsTest(unittest.TestCase):
             "{{ value_json['gpu0']['GPU Usages'] }}",
         )
 
+    def test_intel_qsv_aliases_normalize(self) -> None:
+        self.assertEqual(script.normalize_gpu_collector("qsv"), "intel_qsv")
+        self.assertEqual(script.normalize_gpu_collector("intel-qsv"), "intel_qsv")
+
+    def test_intel_qsv_state_topic_does_not_collide_with_nvidia(self) -> None:
+        self.assertEqual(
+            script.gpu_state_topic("hpc", collector="intel_qsv"),
+            "homelab-ha-discovery/gpu/intel_qsv/usages/hpc",
+        )
+        self.assertNotEqual(
+            script.gpu_state_topic("hpc"),
+            script.gpu_state_topic("hpc", collector="intel_qsv"),
+        )
+
+    def test_intel_qsv_discovery_uses_specific_stable_ids(self) -> None:
+        state_topic = script.gpu_state_topic("hpc", collector="intel_qsv")
+
+        messages = script.gpu_discovery_messages(
+            "hpc",
+            state_topic,
+            INTEL_QSV_METRICS,
+            collector="intel_qsv",
+        )
+
+        self.assertEqual(
+            [message[0] for message in messages],
+            [
+                (
+                    "homeassistant/sensor/"
+                    "homelab_ha_discovery_hpc_intel_qsv_gpu0_video_busy/config"
+                ),
+                (
+                    "homeassistant/sensor/"
+                    "homelab_ha_discovery_hpc_intel_qsv_gpu0_"
+                    "video_enhance_busy/config"
+                ),
+                (
+                    "homeassistant/sensor/"
+                    "homelab_ha_discovery_hpc_intel_qsv_gpu0_render_busy/config"
+                ),
+                (
+                    "homeassistant/sensor/"
+                    "homelab_ha_discovery_hpc_intel_qsv_gpu0_blitter_busy/config"
+                ),
+                (
+                    "homeassistant/sensor/"
+                    "homelab_ha_discovery_hpc_intel_qsv_gpu0_compute_busy/config"
+                ),
+                (
+                    "homeassistant/sensor/"
+                    "homelab_ha_discovery_hpc_intel_qsv_gpu0_qsv_active/config"
+                ),
+                (
+                    "homeassistant/sensor/"
+                    "homelab_ha_discovery_hpc_intel_qsv_gpu0_qsv_available/config"
+                ),
+            ],
+        )
+        payloads = [json.loads(message[1]) for message in messages]
+        self.assertEqual(payloads[0]["name"], "hpc Intel QSV GPU0 Video Engine Busy")
+        self.assertEqual(payloads[0]["state_topic"], state_topic)
+        self.assertEqual(
+            payloads[0]["value_template"],
+            "{{ value_json['gpu0']['Video Busy'] }}",
+        )
+        self.assertEqual(
+            payloads[5]["value_template"],
+            "{{ 1 if value_json['gpu0']['QSV Active'] else 0 }}",
+        )
+
     def test_publish_multiple_selected_gpus_in_one_state_payload(self) -> None:
         with (
             patch.object(script, "load_env_files"),
@@ -196,6 +281,45 @@ class PublishGpuMetricsTest(unittest.TestCase):
             publish_mqtt_many.call_args.kwargs["default_client_id"],
             "homelab-ha-discovery_hpc_amd_rocm_gpu_metrics",
         )
+
+    def test_publish_intel_qsv_uses_collector_specific_topic_and_client(self) -> None:
+        with (
+            patch.object(script, "load_env_files"),
+            patch.object(
+                script,
+                "collect_gpu_metrics",
+                return_value=INTEL_QSV_METRICS,
+            ),
+            patch.object(script, "publish_mqtt_many") as publish_mqtt_many,
+        ):
+            result = script.publish_gpu_metrics(
+                (),
+                "hpc",
+                gpu_indexes=(0,),
+                collector="intel-qsv",
+                publisher_only=True,
+            )
+
+        self.assertEqual(result, 0)
+        messages = publish_mqtt_many.call_args.args[0]
+        self.assertEqual(
+            messages[0][0],
+            "homelab-ha-discovery/gpu/intel_qsv/usages/hpc/gpu0",
+        )
+        self.assertEqual(
+            publish_mqtt_many.call_args.kwargs["default_client_id"],
+            "homelab-ha-discovery_hpc_intel_qsv_gpu_metrics",
+        )
+
+    def test_collect_intel_qsv_routes_to_collector(self) -> None:
+        with patch.object(
+            script,
+            "collect_intel_qsv_gpu_metrics",
+            return_value=INTEL_QSV_METRICS,
+        ) as collect:
+            self.assertEqual(script.collect_gpu_metrics("qsv"), INTEL_QSV_METRICS)
+
+        collect.assert_called_once_with()
 
     def test_timer_passes_repeated_gpu_indexes(self) -> None:
         def fake_run_publish_timer(timer: float | None, publish: object) -> int:

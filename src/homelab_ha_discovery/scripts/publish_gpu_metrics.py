@@ -17,6 +17,9 @@ from homelab_ha_discovery.collectors.gpu_amd_rocm import (
     collect_gpu_metrics as collect_amd_rocm_gpu_metrics,
 )
 from homelab_ha_discovery.collectors.gpu_common import GpuMetrics
+from homelab_ha_discovery.collectors.gpu_intel_qsv import (
+    collect_gpu_metrics as collect_intel_qsv_gpu_metrics,
+)
 from homelab_ha_discovery.collectors.gpu_nvidia import (
     collect_gpu_metrics as collect_nvidia_gpu_metrics,
 )
@@ -45,11 +48,31 @@ GPU_COLLECTOR_ALIASES = {
     "rocm": "amd_rocm",
     "amd_rocm": "amd_rocm",
     "amd-rocm": "amd_rocm",
+    "intel": "intel_qsv",
+    "qsv": "intel_qsv",
+    "intel_qsv": "intel_qsv",
+    "intel-qsv": "intel_qsv",
 }
 GPU_COLLECTOR_LABELS = {
     "nvidia": "",
     "amd_rocm": "AMD ROCm",
+    "intel_qsv": "Intel QSV",
 }
+INTEL_QSV_DISCOVERY_CONFIGS = (
+    ("video_busy", "Video Busy", "Video Engine Busy", "%", None),
+    (
+        "video_enhance_busy",
+        "VideoEnhance Busy",
+        "VideoEnhance Engine Busy",
+        "%",
+        None,
+    ),
+    ("render_busy", "Render/3D Busy", "Render/3D Engine Busy", "%", None),
+    ("blitter_busy", "Blitter Busy", "Blitter Engine Busy", "%", None),
+    ("compute_busy", "Compute Busy", "Compute Engine Busy", "%", None),
+    ("qsv_active", "QSV Active", "QSV Active", None, None),
+    ("qsv_available", "QSV Available", "QSV Available", None, None),
+)
 
 
 def normalize_gpu_collector(collector: str | None) -> str:
@@ -68,6 +91,8 @@ def collect_gpu_metrics(collector: str) -> GpuMetrics:
         return collect_nvidia_gpu_metrics()
     if collector == "amd_rocm":
         return collect_amd_rocm_gpu_metrics()
+    if collector == "intel_qsv":
+        return collect_intel_qsv_gpu_metrics()
     raise ValueError(f"unsupported GPU collector: {collector}")
 
 
@@ -228,47 +253,50 @@ def gpu_discovery_messages(
     collector = normalize_gpu_collector(collector)
     messages: list[MqttMessage] = []
     for key in metrics:
-        configs = (
-            (
-                gpu_metric_identity(
-                    device,
-                    key,
-                    "usage",
-                    state_topic,
-                    collector=collector,
+        if collector == "intel_qsv":
+            configs = intel_qsv_discovery_configs(device, key, state_topic)
+        else:
+            configs = (
+                (
+                    gpu_metric_identity(
+                        device,
+                        key,
+                        "usage",
+                        state_topic,
+                        collector=collector,
+                    ),
+                    gpu_metric_name(device, collector, key, "Usage"),
+                    "%",
+                    None,
+                    f"{{{{ value_json['{key}']['GPU Usages'] }}}}",
                 ),
-                gpu_metric_name(device, collector, key, "Usage"),
-                "%",
-                None,
-                f"{{{{ value_json['{key}']['GPU Usages'] }}}}",
-            ),
-            (
-                gpu_metric_identity(
-                    device,
-                    key,
-                    "memory_usage",
-                    state_topic,
-                    collector=collector,
+                (
+                    gpu_metric_identity(
+                        device,
+                        key,
+                        "memory_usage",
+                        state_topic,
+                        collector=collector,
+                    ),
+                    gpu_metric_name(device, collector, key, "Memory Usage"),
+                    "%",
+                    None,
+                    f"{{{{ value_json['{key}']['Memory Usage'] }}}}",
                 ),
-                gpu_metric_name(device, collector, key, "Memory Usage"),
-                "%",
-                None,
-                f"{{{{ value_json['{key}']['Memory Usage'] }}}}",
-            ),
-            (
-                gpu_metric_identity(
-                    device,
-                    key,
+                (
+                    gpu_metric_identity(
+                        device,
+                        key,
+                        "temperature",
+                        state_topic,
+                        collector=collector,
+                    ),
+                    gpu_metric_name(device, collector, key, "Temperature"),
+                    "°C",
                     "temperature",
-                    state_topic,
-                    collector=collector,
+                    f"{{{{ value_json['{key}']['Temperature'] }}}}",
                 ),
-                gpu_metric_name(device, collector, key, "Temperature"),
-                "°C",
-                "temperature",
-                f"{{{{ value_json['{key}']['Temperature'] }}}}",
-            ),
-        )
+            )
         for (
             identity,
             name,
@@ -290,6 +318,39 @@ def gpu_discovery_messages(
             )
             messages.append((identity.discovery_topic, payload, True))
     return messages
+
+
+def intel_qsv_discovery_configs(
+    device: str,
+    key: str,
+    state_topic: str,
+) -> tuple[tuple[MetricIdentity, str, str | None, str | None, str], ...]:
+    configs: list[tuple[MetricIdentity, str, str | None, str | None, str]] = []
+    for config in INTEL_QSV_DISCOVERY_CONFIGS:
+        metric, payload_key, label, unit_of_measurement, device_class = config
+        if metric in {"qsv_active", "qsv_available"}:
+            value_template = (
+                f"{{{{ 1 if value_json['{key}']['{payload_key}'] else 0 }}}}"
+            )
+        else:
+            value_template = f"{{{{ value_json['{key}']['{payload_key}'] }}}}"
+
+        configs.append(
+            (
+                gpu_metric_identity(
+                    device,
+                    key,
+                    metric,
+                    state_topic,
+                    collector="intel_qsv",
+                ),
+                gpu_metric_name(device, "intel_qsv", key, label),
+                unit_of_measurement,
+                device_class,
+                value_template,
+            )
+        )
+    return tuple(configs)
 
 
 def publish_gpu_metrics(
@@ -359,7 +420,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--collector",
         default=DEFAULT_GPU_COLLECTOR,
-        help="GPU collector backend: nvidia or amd_rocm. Default: nvidia.",
+        help=(
+            "GPU collector backend: nvidia, amd_rocm, or intel_qsv. "
+            "Default: nvidia."
+        ),
     )
     parser.add_argument(
         "--gpu",

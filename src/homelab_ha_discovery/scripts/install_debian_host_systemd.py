@@ -64,6 +64,7 @@ from homelab_ha_discovery.installer.detect.commands import (
 from homelab_ha_discovery.installer.detect.frigate import http_url_reachable
 from homelab_ha_discovery.installer.detect.gpu import (
     detect_amd_rocm_gpu_indexes,
+    detect_intel_qsv_gpu_devices,
     detect_nvidia_gpu_indexes,
     parse_amd_rocm_gpu_indexes,
     parse_nvidia_gpu_indexes,
@@ -144,6 +145,7 @@ def build_detected_config(
         (detect_config, "command_exists", command_exists),
         (detect_config, "detect_nvidia_gpu_indexes", detect_nvidia_gpu_indexes),
         (detect_config, "detect_amd_rocm_gpu_indexes", detect_amd_rocm_gpu_indexes),
+        (detect_config, "detect_intel_qsv_gpu_devices", detect_intel_qsv_gpu_devices),
         (detect_config, "detect_disk_devices", detect_disk_devices),
         (detect_config, "detect_nvme_devices", detect_nvme_devices),
         (detect_config, "detect_network_interfaces", detect_network_interfaces),

@@ -14,10 +14,10 @@ fi
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd -- "${script_dir}/.." && pwd)"
 
-if command -v hhdctl >/dev/null 2>&1; then
-  hhdctl_cmd=(hhdctl)
-elif [[ -f "${repo_root}/src/homelab_ha_discovery/scripts/hhdctl.py" ]]; then
+if [[ -f "${repo_root}/src/homelab_ha_discovery/scripts/hhdctl.py" ]]; then
   hhdctl_cmd=(python3 "${repo_root}/src/homelab_ha_discovery/scripts/hhdctl.py")
+elif command -v hhdctl >/dev/null 2>&1; then
+  hhdctl_cmd=(hhdctl)
 else
   echo "hhdctl was not found." >&2
   exit 1

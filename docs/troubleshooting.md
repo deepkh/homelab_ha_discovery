@@ -67,6 +67,28 @@ rocm-smi --showproductname --showuse --showmemuse --showtemp --json
 
 If `rocm-smi` fails or returns no cards, fix the AMD ROCm driver/tooling first.
 
+## Intel QSV metrics missing
+
+Check DRI devices and Intel media tooling:
+
+```bash
+ls -l /dev/dri
+vainfo --display drm --device /dev/dri/renderD128
+intel_gpu_top -J -s 1000 -o -
+```
+
+Check that FFmpeg can see QSV support when the service is meant to track media
+transcoding load:
+
+```bash
+ffmpeg -hide_banner -hwaccels
+ffmpeg -hide_banner -init_hw_device qsv=hw:/dev/dri/renderD128 -f lavfi -i nullsrc -frames:v 1 -f null -
+```
+
+Install `intel-gpu-tools` for `intel_gpu_top` and `vainfo` for VA-API checks.
+The systemd detector enables Intel QSV only when a render device and
+`intel_gpu_top` are available.
+
 ## Podman metrics missing
 
 Check root Podman:

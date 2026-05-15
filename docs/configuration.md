@@ -37,6 +37,7 @@ selects the backend:
 
 - `nvidia` uses `nvidia-smi`
 - `amd_rocm` uses `rocm-smi`
+- `intel_qsv` uses `intel_gpu_top -J` from `intel-gpu-tools`
 
 Example NVIDIA service publishing two selected cards in one timer loop:
 
@@ -61,6 +62,21 @@ Example AMD ROCm service:
   "gpu_indexes": [0],
   "timer": 5.0,
   "expire_after": null
+}
+```
+
+Example Intel QSV service:
+
+```json
+{
+  "type": "gpu",
+  "enabled": true,
+  "collector": "intel_qsv",
+  "gpu_indexes": [0],
+  "timer": 5.0,
+  "expire_after": null,
+  "render_device": "/dev/dri/renderD128",
+  "drm_device": "/dev/dri/card0"
 }
 ```
 

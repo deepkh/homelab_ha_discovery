@@ -16,6 +16,7 @@ from homelab_ha_discovery.installer.detect.commands import command_exists
 from homelab_ha_discovery.installer.detect.frigate import http_url_reachable
 from homelab_ha_discovery.installer.detect.gpu import (
     detect_amd_rocm_gpu_indexes,
+    detect_intel_qsv_gpu_devices,
     detect_nvidia_gpu_indexes,
 )
 from homelab_ha_discovery.installer.detect.network import detect_network_interfaces
@@ -29,6 +30,28 @@ from homelab_ha_discovery.installer.detect.storage import (
 
 
 GENERATED_BY = "install_debian_host_systemd.py"
+
+def log_intel_qsv_detection(
+    devices: dict[str, str | None],
+    missing_requirements: list[str] | None = None,
+) -> None:
+    render_device = devices.get("render_device")
+    drm_device = devices.get("drm_device")
+    if not render_device and not drm_device:
+        print("Intel QSV detection: not found; no /dev/dri/renderD* or card* devices")
+        return
+
+    print(
+        "Intel QSV detection: DRI devices found "
+        f"render_device={render_device or '-'} drm_device={drm_device or '-'}"
+    )
+    if missing_requirements:
+        print(
+            "Intel QSV detection: disabled; missing "
+            + ", ".join(missing_requirements)
+        )
+    else:
+        print("Intel QSV detection: found; enabling intel_qsv GPU service")
 
 def build_detected_config(
     device: str,
@@ -93,6 +116,41 @@ def build_detected_config(
                 "gpu",
                 bool(amd_rocm_indexes),
                 **amd_rocm_values,
+            )
+        )
+
+    intel_qsv_devices = detect_intel_qsv_gpu_devices()
+    intel_qsv_dri_exists = bool(
+        intel_qsv_devices.get("render_device") or intel_qsv_devices.get("drm_device")
+    )
+    if not intel_qsv_dri_exists:
+        log_intel_qsv_detection(intel_qsv_devices)
+    else:
+        intel_qsv_missing = []
+        if not intel_qsv_devices.get("render_device"):
+            intel_qsv_missing.append("/dev/dri/renderD*")
+        if not command_exists("intel_gpu_top"):
+            intel_qsv_missing.append("intel_gpu_top")
+        log_intel_qsv_detection(intel_qsv_devices, intel_qsv_missing)
+
+        intel_qsv_values: dict[str, Any] = {
+            "collector": "intel_qsv",
+            "missing_requirements": intel_qsv_missing,
+            "render_device": intel_qsv_devices.get("render_device"),
+            "drm_device": intel_qsv_devices.get("drm_device"),
+            "note": (
+                "publishes Intel QSV media engine metrics in one timer loop"
+                if not intel_qsv_missing
+                else "disabled template; enable after Intel QSV tooling is available"
+            ),
+        }
+        if intel_qsv_devices.get("render_device"):
+            intel_qsv_values["gpu_indexes"] = [0]
+        services.append(
+            service_entry(
+                "gpu",
+                not intel_qsv_missing,
+                **intel_qsv_values,
             )
         )
 

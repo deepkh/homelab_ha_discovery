@@ -44,10 +44,15 @@ GPU_COLLECTOR_ALIASES = {
     "rocm": "amd_rocm",
     "amd_rocm": "amd_rocm",
     "amd-rocm": "amd_rocm",
+    "intel": "intel_qsv",
+    "qsv": "intel_qsv",
+    "intel_qsv": "intel_qsv",
+    "intel-qsv": "intel_qsv",
 }
 GPU_COLLECTOR_LABELS = {
     "nvidia": "NVIDIA",
     "amd_rocm": "AMD ROCm",
+    "intel_qsv": "Intel QSV",
 }
 SCRIPT_BY_SERVICE_TYPE = {
     "cpu": "publish_cpu_metrics.py",
