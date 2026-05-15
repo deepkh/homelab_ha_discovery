@@ -19,6 +19,10 @@ sudo ./scripts/bootstrap-debian-host.sh --ha-device-id hpc
 Bootstrap detects local GPU tooling and writes GPU service entries to
 `host-metrics.json` when available. NVIDIA uses `nvidia-smi`; AMD ROCm uses
 `rocm-smi`; Intel QSV uses `/dev/dri/renderD*` plus `intel_gpu_top`.
+During detection, bootstrap prints `detected` / `not detected` lines for each
+supported component. Generated service entries default to `timer: 5.0`, except
+disk SMART and NVMe SMART entries default to `60.0`; edit `host-metrics.json`
+after bootstrap if a component should run at a different interval.
 
 Bootstrap also detects running root Podman containers when `podman` is available.
 Rootless Podman is opt-in per user:

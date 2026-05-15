@@ -31,6 +31,20 @@ from homelab_ha_discovery.installer.detect.storage import (
 
 GENERATED_BY = "install_debian_host_systemd.py"
 
+def log_detection(
+    component: str,
+    detected: bool,
+    detail: str,
+    missing_requirements: list[str] | None = None,
+) -> None:
+    status = "detected" if detected else "not detected"
+    print(f"{component} detection: {status}; {detail}")
+    if missing_requirements:
+        print(
+            f"{component} detection: disabled; missing "
+            + ", ".join(missing_requirements)
+        )
+
 def log_intel_qsv_detection(
     devices: dict[str, str | None],
     missing_requirements: list[str] | None = None,
@@ -38,20 +52,30 @@ def log_intel_qsv_detection(
     render_device = devices.get("render_device")
     drm_device = devices.get("drm_device")
     if not render_device and not drm_device:
-        print("Intel QSV detection: not found; no /dev/dri/renderD* or card* devices")
+        log_detection(
+            "Intel QSV",
+            False,
+            "no /dev/dri/renderD* or card* devices",
+        )
         return
 
-    print(
-        "Intel QSV detection: DRI devices found "
-        f"render_device={render_device or '-'} drm_device={drm_device or '-'}"
+    log_detection(
+        "Intel QSV",
+        not missing_requirements,
+        f"render_device={render_device or '-'} drm_device={drm_device or '-'}",
+        missing_requirements,
     )
-    if missing_requirements:
-        print(
-            "Intel QSV detection: disabled; missing "
-            + ", ".join(missing_requirements)
-        )
-    else:
-        print("Intel QSV detection: found; enabling intel_qsv GPU service")
+
+def list_detail(name: str, values: list[object] | tuple[object, ...]) -> str:
+    if not values:
+        return f"no {name}"
+    return f"{name}=" + ", ".join(str(value) for value in values)
+
+def service_scope(service: dict[str, Any]) -> str:
+    scope = service.get("scope")
+    if isinstance(scope, str) and scope:
+        return scope
+    return "unknown"
 
 def build_detected_config(
     device: str,
@@ -68,6 +92,12 @@ def build_detected_config(
         for command in ("top", "sensors")
         if not command_exists(command)
     ]
+    log_detection(
+        "CPU",
+        not cpu_missing,
+        "tools=top,sensors" if not cpu_missing else "required tools missing",
+        cpu_missing,
+    )
     services.append(
         service_entry(
             "cpu",
@@ -78,6 +108,12 @@ def build_detected_config(
 
     nvidia_exists = command_exists("nvidia-smi")
     nvidia_indexes = detect_nvidia_gpu_indexes() if nvidia_exists else []
+    if nvidia_indexes:
+        log_detection("NVIDIA GPU", True, list_detail("indexes", nvidia_indexes))
+    elif nvidia_exists:
+        log_detection("NVIDIA GPU", False, "nvidia-smi found but no GPUs detected")
+    else:
+        log_detection("NVIDIA GPU", False, "required tooling missing", ["nvidia-smi"])
     nvidia_values: dict[str, Any] = {
         "collector": "nvidia",
         "missing_requirements": [] if nvidia_exists else ["nvidia-smi"],
@@ -99,6 +135,12 @@ def build_detected_config(
 
     amd_rocm_exists = command_exists("rocm-smi")
     amd_rocm_indexes = detect_amd_rocm_gpu_indexes() if amd_rocm_exists else []
+    if amd_rocm_indexes:
+        log_detection("AMD ROCm GPU", True, list_detail("indexes", amd_rocm_indexes))
+    elif amd_rocm_exists:
+        log_detection("AMD ROCm GPU", False, "rocm-smi found but no GPUs detected")
+    else:
+        log_detection("AMD ROCm GPU", False, "required tooling missing", ["rocm-smi"])
     if amd_rocm_exists:
         amd_rocm_values: dict[str, Any] = {
             "collector": "amd_rocm",
@@ -154,13 +196,27 @@ def build_detected_config(
             )
         )
 
+    disk_devices = detect_disk_devices()
+    nvme_devices = detect_nvme_devices()
     smart_missing = [
         command
         for command in ("sudo", "smartctl")
         if not command_exists(command)
     ]
     smart_enabled = not smart_missing
-    for dev in detect_disk_devices():
+    log_detection(
+        "Disk SMART",
+        bool(disk_devices) and smart_enabled,
+        list_detail("devices", disk_devices),
+        smart_missing if disk_devices else None,
+    )
+    log_detection(
+        "NVMe SMART",
+        bool(nvme_devices) and smart_enabled,
+        list_detail("devices", nvme_devices),
+        smart_missing if nvme_devices else None,
+    )
+    for dev in disk_devices:
         services.append(
             service_entry(
                 "disk_smart",
@@ -170,7 +226,7 @@ def build_detected_config(
                 note="requires non-interactive sudo permission for smartctl",
             )
         )
-    for dev in detect_nvme_devices():
+    for dev in nvme_devices:
         services.append(
             service_entry(
                 "nvme_smart",
@@ -180,14 +236,30 @@ def build_detected_config(
                 note="requires non-interactive sudo permission for smartctl",
             )
         )
-    services.extend(detect_network_interfaces())
+    network_services = detect_network_interfaces()
+    log_detection(
+        "Network",
+        bool(network_services),
+        list_detail(
+            "interfaces",
+            [service.get("dev") for service in network_services],
+        ),
+    )
+    services.extend(network_services)
+    docker_exists = command_exists("docker")
+    log_detection(
+        "Docker",
+        docker_exists,
+        "command=docker" if docker_exists else "required tooling missing",
+        None if docker_exists else ["docker"],
+    )
     services.append(
         service_entry(
             "docker_containers",
             False,
             include_label=DEFAULT_CONTAINER_INCLUDE_LABEL,
             expire_after=None,
-            missing_requirements=[] if command_exists("docker") else ["docker"],
+            missing_requirements=[] if docker_exists else ["docker"],
             note=(
                 "disabled template; enable manually after confirming Docker socket "
                 "access"
@@ -195,15 +267,42 @@ def build_detected_config(
         )
     )
     if include_podman:
-        services.extend(
-            detected_podman_service_entries(
-                rootless_podman_users,
-                podman_socket=podman_socket,
-                rootless_podman_uids=rootless_podman_uids,
-                auto_discover_rootless_podman=auto_discover_rootless_podman,
-            )
+        podman_services = detected_podman_service_entries(
+            rootless_podman_users,
+            podman_socket=podman_socket,
+            rootless_podman_uids=rootless_podman_uids,
+            auto_discover_rootless_podman=auto_discover_rootless_podman,
         )
+        enabled_podman_scopes = [
+            service_scope(service)
+            for service in podman_services
+            if service.get("enabled")
+        ]
+        podman_missing = sorted(
+            {
+                requirement
+                for service in podman_services
+                for requirement in service.get("missing_requirements", [])
+                if isinstance(requirement, str)
+            }
+        )
+        log_detection(
+            "Podman",
+            bool(enabled_podman_scopes),
+            list_detail("enabled_scopes", enabled_podman_scopes)
+            if enabled_podman_scopes
+            else "no running Podman containers detected",
+            podman_missing if podman_missing else None,
+        )
+        services.extend(podman_services)
+    else:
+        log_detection("Podman", False, "disabled by config detect option")
     frigate_reachable = http_url_reachable(DEFAULT_FRIGATE_METRICS_URL)
+    log_detection(
+        "Frigate",
+        frigate_reachable,
+        f"metrics_url={DEFAULT_FRIGATE_METRICS_URL}",
+    )
     frigate_values: dict[str, Any] = {
         "url": DEFAULT_FRIGATE_METRICS_URL,
         "expire_after": None,
@@ -217,6 +316,11 @@ def build_detected_config(
             frigate_reachable,
             **frigate_values,
         )
+    )
+    log_detection(
+        "ASUS router",
+        False,
+        "auto-detection is not supported; disabled templates generated",
     )
     services.append(
         service_entry(

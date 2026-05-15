@@ -25,13 +25,13 @@ DEFAULT_TIMERS = {
     "gpu": 5.0,
     "disk_smart": 60.0,
     "nvme_smart": 60.0,
-    "network": 1.0,
-    "docker_containers": 60.0,
-    "podman_containers": 60.0,
-    "frigate": 10.0,
-    "asus_router_cpu": 1.0,
-    "asus_router_connected_clients": 1.0,
-    "asus_router_network": 1.0,
+    "network": 5.0,
+    "docker_containers": 5.0,
+    "podman_containers": 5.0,
+    "frigate": 5.0,
+    "asus_router_cpu": 5.0,
+    "asus_router_connected_clients": 5.0,
+    "asus_router_network": 5.0,
 }
 DEFAULT_TIMER_PUBLISH_DISCOVERY_CONFIG = 60.0
 DEFAULT_FRIGATE_METRICS_URL = "http://127.0.0.1:5000/api/metrics"

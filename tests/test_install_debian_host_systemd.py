@@ -635,12 +635,8 @@ class InstallDebianHostSystemdTest(unittest.TestCase):
             ],
         )
         self.assertIn(
-            "Intel QSV detection: DRI devices found "
+            "Intel QSV detection: detected; "
             "render_device=/dev/dri/renderD128 drm_device=/dev/dri/card0",
-            stdout.getvalue(),
-        )
-        self.assertIn(
-            "Intel QSV detection: found; enabling intel_qsv GPU service",
             stdout.getvalue(),
         )
 
@@ -713,7 +709,7 @@ class InstallDebianHostSystemdTest(unittest.TestCase):
             ],
         )
         self.assertIn(
-            "Intel QSV detection: DRI devices found "
+            "Intel QSV detection: not detected; "
             "render_device=/dev/dri/renderD128 drm_device=/dev/dri/card0",
             stdout.getvalue(),
         )
@@ -769,7 +765,33 @@ class InstallDebianHostSystemdTest(unittest.TestCase):
         ]
         self.assertEqual(intel_entries, [])
         self.assertIn(
-            "Intel QSV detection: not found; no /dev/dri/renderD* or card* devices",
+            "Intel QSV detection: not detected; "
+            "no /dev/dri/renderD* or card* devices",
+            stdout.getvalue(),
+        )
+        self.assertIn(
+            "CPU detection: not detected; required tools missing",
+            stdout.getvalue(),
+        )
+        self.assertIn(
+            "NVIDIA GPU detection: not detected; required tooling missing",
+            stdout.getvalue(),
+        )
+        self.assertIn(
+            "AMD ROCm GPU detection: not detected; required tooling missing",
+            stdout.getvalue(),
+        )
+        self.assertIn(
+            "Docker detection: not detected; required tooling missing",
+            stdout.getvalue(),
+        )
+        self.assertIn(
+            "Frigate detection: not detected; "
+            "metrics_url=http://127.0.0.1:5000/api/metrics",
+            stdout.getvalue(),
+        )
+        self.assertIn(
+            "ASUS router detection: not detected; auto-detection is not supported",
             stdout.getvalue(),
         )
 
@@ -883,7 +905,7 @@ class InstallDebianHostSystemdTest(unittest.TestCase):
                 {
                     "type": "asus_router_network",
                     "enabled": False,
-                    "timer": 1.0,
+                    "timer": 5.0,
                     "expire_after": None,
                     "router_name": "ASUS AX86U",
                     "dev": "eth0",
@@ -945,7 +967,7 @@ class InstallDebianHostSystemdTest(unittest.TestCase):
                 {
                     "type": "docker_containers",
                     "enabled": False,
-                    "timer": 60.0,
+                    "timer": 5.0,
                     "expire_after": None,
                     "include_label": "homelab-ha-discovery.enabled=true",
                     "missing_requirements": [],
@@ -1031,7 +1053,7 @@ class InstallDebianHostSystemdTest(unittest.TestCase):
                 {
                     "type": "podman_containers",
                     "enabled": True,
-                    "timer": 60.0,
+                    "timer": 5.0,
                     "expire_after": None,
                     "scope": "root",
                     "include_label": "homelab-ha-discovery.enabled=true",
@@ -1042,7 +1064,7 @@ class InstallDebianHostSystemdTest(unittest.TestCase):
                 {
                     "type": "podman_containers",
                     "enabled": True,
-                    "timer": 60.0,
+                    "timer": 5.0,
                     "expire_after": None,
                     "scope": "alice",
                     "rootless_user": "alice",
@@ -1141,7 +1163,7 @@ class InstallDebianHostSystemdTest(unittest.TestCase):
                 {
                     "type": "frigate",
                     "enabled": True,
-                    "timer": 10.0,
+                    "timer": 5.0,
                     "expire_after": None,
                     "url": DEFAULT_FRIGATE_METRICS_URL,
                     "missing_requirements": [],
@@ -1197,7 +1219,7 @@ class InstallDebianHostSystemdTest(unittest.TestCase):
                 {
                     "type": "frigate",
                     "enabled": False,
-                    "timer": 10.0,
+                    "timer": 5.0,
                     "expire_after": None,
                     "url": DEFAULT_FRIGATE_METRICS_URL,
                     "missing_requirements": [],

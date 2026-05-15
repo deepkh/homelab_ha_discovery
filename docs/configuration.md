@@ -29,6 +29,9 @@ Default path:
 ```
 
 Use this file to control which publishers are enabled by the systemd installer.
+Bootstrap-generated services default to `timer: 5.0`, except disk SMART and
+NVMe SMART entries default to `60.0`. You can edit each service timer after
+detection.
 
 ### GPU services
 
